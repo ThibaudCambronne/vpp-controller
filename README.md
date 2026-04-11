@@ -10,11 +10,11 @@ Example layout:
 
 ```text
 vpp-controller/
-	data/
-	src/
-		vpp_controller/
-			__init__.py
-			paths.py
+    data/
+    src/
+        vpp_controller/
+            __init__.py
+            paths.py
             config.py
 ```
 
