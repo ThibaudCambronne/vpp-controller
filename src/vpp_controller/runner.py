@@ -38,9 +38,10 @@ def run_day_optimization(
     Run optimization for one day.
     """
 
-    providers = _load_provider_module("vpp_controller.data_sources")
+    # providers = _load_provider_module("vpp_controller.data_sources")
 
-    topology_df = providers.get_network_topology_and_parameters(network_ieee_case)
+    topology_df = pd.read_csv(f"data/{network_ieee_case}.csv")
+    # providers.get_network_topology_and_parameters(network_ieee_case)
     demand_df = providers.get_daily_node_demand(day, network_ieee_case)
     price_series = providers.get_daily_price_curve(day, network_ieee_case)
 
@@ -80,23 +81,23 @@ def run_day_optimization(
     )
 
 
-def _load_provider_module(module_name: str):
-    try:
-        module = importlib.import_module(module_name)
-    except ModuleNotFoundError as exc:
-        required = ", ".join(REQUIRED_PROVIDER_FUNCTIONS)
-        raise NotImplementedError(
-            f"Missing provider module '{module_name}'. Add it with functions: {required}."
-        ) from exc
+# def _load_provider_module(module_name: str):
+#     try:
+#         module = importlib.import_module(module_name)
+#     except ModuleNotFoundError as exc:
+#         required = ", ".join(REQUIRED_PROVIDER_FUNCTIONS)
+#         raise NotImplementedError(
+#             f"Missing provider module '{module_name}'. Add it with functions: {required}."
+#         ) from exc
 
-    missing = [fn for fn in REQUIRED_PROVIDER_FUNCTIONS if not hasattr(module, fn)]
-    if missing:
-        missing_str = ", ".join(missing)
-        raise NotImplementedError(
-            f"Provider module '{module_name}' is missing functions: {missing_str}."
-        )
+#     missing = [fn for fn in REQUIRED_PROVIDER_FUNCTIONS if not hasattr(module, fn)]
+#     if missing:
+#         missing_str = ", ".join(missing)
+#         raise NotImplementedError(
+#             f"Provider module '{module_name}' is missing functions: {missing_str}."
+#         )
 
-    return module
+#     return module
 
 
 def _build_model_inputs(
