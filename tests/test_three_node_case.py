@@ -12,6 +12,10 @@ def test_1():
     because of congestion on the line between node 1 and node 2.
 
     The test checks that the battery is indeed placed at node 2, and that the cycle constraint is satisfied.
+
+    Model:      |0| --(3 MW)--> |1| --(0.5 MW)--> |2|
+    demand t1:   0 MW            1 MW              0 MW
+    demand t2:   0 MW            1 MW              1 MW
     """
     T = 2
     hours = np.arange(T)
@@ -31,9 +35,9 @@ def test_1():
     )
     c = np.vstack([c0, np.zeros_like(c0), np.zeros_like(c0)])
 
-    I_max = np.array([2.0, 1.2])
+    I_max = np.array([3.0, 0.5])
 
-    battery_duration = 4.0  # hours
+    battery_duration = 2.0  # hours
     max_energy_capacity = 1 * battery_duration
 
     formulation = formulate_vpp_problem(

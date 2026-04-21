@@ -72,6 +72,7 @@ def formulate_vpp_problem(
         r=r,
         x=x,
         I_max=I_max,
+        v_0=v_0,
     )
 
     node_to_idx = {node: idx for idx, node in enumerate(node_ids)}
@@ -87,9 +88,12 @@ def formulate_vpp_problem(
     if len(root_candidates) != 1:
         raise ValueError("Expected exactly one root node in radial feeder.")
     root_node = root_candidates[0]
+    root_node_idx = node_to_idx[root_node]
+    assert rho[root_node] == -1, "Root node must have rho value of -1."
+    assert A[root_node_idx, root_node_idx] == 0, "Root node cannot have a self-loop."
 
-    p = cp.Variable((n_nodes, n_time), nonneg=True, name="p_{i,t}")
-    q = cp.Variable((n_nodes, n_time), nonneg=True, name="q_{i,t}")
+    p = cp.Variable((n_nodes, n_time), nonneg=True, name="p_{i,t}")  # (5)
+    q = cp.Variable((n_nodes, n_time), nonneg=True, name="q_{i,t}")  # (5)
     s = cp.Variable((n_nodes, n_time), nonneg=True, name="s_{i,t}")
 
     P = cp.Variable((n_edges, n_time), name="P_{ij,t}")
@@ -113,66 +117,78 @@ def formulate_vpp_problem(
     delta_P = delta_P_pos - delta_P_neg
     delta_Q = delta_Q_pos - delta_Q_neg
 
-    constraints: Dict[str, List[cp.Constraint]] = {
-        "active_power_balance": [],
-        "reactive_power_balance": [],
-        "voltage_balance": [],
-        "current_relation_relaxed": [],
-        "generator_apparent_power": [],
-        "generation_cap": [],
-        "voltage_bounds": [],
-        "thermal_limits": [],
-        "slack_bus_voltage": [],
-        "battery_energy_dynamics": [],
-        "battery_energy_limits": [],
-        "battery_cycle": [],
-        "battery_inverter_apparent_power": [],
-        "battery_inverter_capacity": [],
-        "battery_energy_power_link": [],
-        "battery_total_capacity": [],
-    }
+    constraints: Dict[str, List[cp.Constraint]] = {}
 
+    # Boundary condition that at the root node, the grid voltage is stable at the reference value.
+    constraints["root_node_voltage"] = []
     for t_idx in range(n_time):
-        constraints["slack_bus_voltage"].append(
-            V[node_to_idx[root_node], t_idx] == v_0**2
-        )
+        constraints["root_node_voltage"].append(V[root_node_idx, t_idx] == v_0**2)
 
+    constraints["voltage_bounds"] = []
+    constraints["generator_apparent_power"] = []
+    constraints["generation_apparent_power_cap"] = []
+    constraints["battery_inverter_apparent_power"] = []
+    constraints["battery_inverter_capacity"] = []
+    constraints["battery_energy_limits"] = []
+    constraints["battery_cycle"] = []
+    constraints["battery_energy_dynamics"] = []
     for node in node_ids:
-        j_idx = node_to_idx[node]
+        j_idx = node_to_idx[node]  # node index in 0-based ordering
         for t_idx in range(n_time):
+            # Voltage bounds at each node and time step (8)
             constraints["voltage_bounds"].append(V[j_idx, t_idx] >= v_min**2)
             constraints["voltage_bounds"].append(V[j_idx, t_idx] <= v_max**2)
+
+            # Generator apparent power definition, relaxed (6)
             constraints["generator_apparent_power"].append(
                 cp.norm(cp.hstack([p[j_idx, t_idx], q[j_idx, t_idx]]), 2)
                 <= s[j_idx, t_idx]
             )
-            constraints["generation_cap"].append(s[j_idx, t_idx] <= s_max[j_idx])
+
+            # Generator capacity (7)
+            constraints["generation_apparent_power_cap"].append(
+                s[j_idx, t_idx] <= s_max[j_idx]
+            )
+
+            # Battery inverter apparent power definition, relaxed (13)
             constraints["battery_inverter_apparent_power"].append(
                 cp.norm(cp.hstack([P_batt[j_idx, t_idx], Q_batt[j_idx, t_idx]]), 2)
                 <= S_batt[j_idx, t_idx]
             )
+
+            # Battery inverter capacity (14)
             constraints["battery_inverter_capacity"].append(
                 S_batt[j_idx, t_idx] <= P_batt_max[j_idx]
             )
+
+            # Battery energy limits (11)
             constraints["battery_energy_limits"].append(e[j_idx, t_idx] >= 0.0)
             constraints["battery_energy_limits"].append(
                 e[j_idx, t_idx] <= e_batt_max_by_node[j_idx]
             )
 
+        # Battery energy limits, at time T (11)
         constraints["battery_energy_limits"].append(e[j_idx, n_time] >= 0.0)
         constraints["battery_energy_limits"].append(
             e[j_idx, n_time] <= e_batt_max_by_node[j_idx]
         )
 
+        # Battery cycle constraint (12)
         constraints["battery_cycle"].append(e[j_idx, 0] == e_0)
         constraints["battery_cycle"].append(e[j_idx, n_time] == e_0)
 
+        # Battery energy dynamics (10)
         for t_idx in range(n_time):
             constraints["battery_energy_dynamics"].append(
                 e[j_idx, t_idx + 1]
                 == e[j_idx, t_idx] - eta_batt * P_batt[j_idx, t_idx] * delta_t
             )
 
+    constraints["active_power_balance"] = []
+    constraints["reactive_power_balance"] = []
+    constraints["voltage_balance"] = []
+    constraints["thermal_limits"] = []
+    constraints["current_relation_relaxed"] = []
     for edge_idx, (i, j) in enumerate(edge_ids):
         i_idx = node_to_idx[i]
         j_idx = node_to_idx[j]
@@ -188,6 +204,7 @@ def formulate_vpp_problem(
             downstream_p = 0.0
             downstream_q = 0.0
 
+        # Active power balance constraint (1)
         constraints["active_power_balance"].append(
             P[edge_idx, :]
             == (
@@ -200,6 +217,7 @@ def formulate_vpp_problem(
             )
         )
 
+        # Reactive power balance constraint (2)
         constraints["reactive_power_balance"].append(
             Q[edge_idx, :]
             == (
@@ -212,6 +230,7 @@ def formulate_vpp_problem(
             )
         )
 
+        # Voltage balance constraint (3)
         constraints["voltage_balance"].append(
             V[j_idx, :]
             == V[i_idx, :]
@@ -219,32 +238,31 @@ def formulate_vpp_problem(
             - 2.0 * (r[edge_idx] * P[edge_idx, :] + x[edge_idx] * Q[edge_idx, :])
         )
 
+        # Thermal limit constraint (9)
         constraints["thermal_limits"].append(L[edge_idx, :] <= I_max[edge_idx] ** 2)
 
+        # Current relation, relaxed (4)
         for t_idx in range(n_time):
             constraints["current_relation_relaxed"].append(
-                cp.norm(
-                    cp.hstack(
-                        [
-                            2.0 * P[edge_idx, t_idx],
-                            2.0 * Q[edge_idx, t_idx],
-                            L[edge_idx, t_idx] - V[i_idx, t_idx],
-                        ]
-                    ),
-                    2,
+                L[edge_idx, t_idx]
+                >= cp.quad_over_lin(
+                    cp.vstack([P[edge_idx, t_idx], Q[edge_idx, t_idx]]), V[i_idx, t_idx]
                 )
-                <= L[edge_idx, t_idx] + V[i_idx, t_idx]
             )
 
+    # Battery energy-power link (15)
+    constraints["battery_energy_power_link"] = []
     for node in node_ids:
         j_idx = node_to_idx[node]
         constraints["battery_energy_power_link"].append(
             e_batt_max_by_node[j_idx] == alpha * P_batt_max[j_idx]
         )
 
-    constraints["battery_total_capacity"].append(
-        cp.sum(e_batt_max_by_node) <= e_batt_max
-    )
+    # Battery total capacity constraint (16)
+    constraints["battery_total_capacity"] = [cp.sum(e_batt_max_by_node) <= e_batt_max]  # type: ignore
+
+    # No battery at root node
+    constraints["no_battery_at_root"] = [e_batt_max_by_node[root_node_idx] == 0.0]
 
     generation_cost = cp.sum(cp.multiply(c, s))
     imbalance_cost = mu_P * cp.sum(delta_P_pos + delta_P_neg) + mu_Q * cp.sum(
@@ -305,6 +323,7 @@ def _validate_inputs(
     r: np.ndarray,
     x: np.ndarray,
     I_max: np.ndarray,
+    v_0: float,
 ) -> None:
     if n_nodes == 0:
         raise ValueError("N cannot be empty.")
@@ -330,3 +349,8 @@ def _validate_inputs(
         raise ValueError("I_max must have shape (|E|,).")
     if len(rho) != n_nodes:
         raise ValueError("rho must contain one entry per node.")
+    if v_0 != 1.0:
+        raise ValueError(
+            "v_0 should most likely be 1.0 p.u.."
+            "If it is not the case, think about why and review the code."
+        )
