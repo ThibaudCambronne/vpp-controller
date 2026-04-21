@@ -22,7 +22,6 @@ def formulate_vpp_problem(
     E: Sequence[Tuple[int, int]],
     T: np.ndarray,
     rho: Mapping[int, int],
-    A: np.ndarray,
     l_P: np.ndarray,
     l_Q: np.ndarray,
     c: np.ndarray,
@@ -64,7 +63,6 @@ def formulate_vpp_problem(
         n_edges=n_edges,
         n_time=n_time,
         rho=rho,
-        A=A,
         l_P=l_P,
         l_Q=l_Q,
         c=c,
@@ -78,6 +76,12 @@ def formulate_vpp_problem(
     node_to_idx = {node: idx for idx, node in enumerate(node_ids)}
     edge_to_idx = {(i, j): idx for idx, (i, j) in enumerate(edge_ids)}
 
+    # construct adjency matrix
+    A = np.zeros((n_nodes, n_nodes))
+    for i in node_ids:
+        A[node_to_idx[rho[i]], node_to_idx[i]] = 1
+    A[0, 0] = 0
+
     children_by_node: Dict[int, List[int]] = {node: [] for node in node_ids}
     parent_edge_by_node: Dict[int, int] = {}
     for edge_idx, (i, j) in enumerate(edge_ids):
@@ -89,16 +93,17 @@ def formulate_vpp_problem(
         raise ValueError("Expected exactly one root node in radial feeder.")
     root_node = root_candidates[0]
     root_node_idx = node_to_idx[root_node]
-    assert rho[root_node] == -1, "Root node must have rho value of -1."
+    assert root_node_idx == 0, "Root node must be the first node."
+    assert rho[root_node] == 0, "Root node must have rho value of 0."
     assert A[root_node_idx, root_node_idx] == 0, "Root node cannot have a self-loop."
 
     p = cp.Variable((n_nodes, n_time), nonneg=True, name="p_{i,t}")  # (5)
     q = cp.Variable((n_nodes, n_time), nonneg=True, name="q_{i,t}")  # (5)
     s = cp.Variable((n_nodes, n_time), nonneg=True, name="s_{i,t}")
 
-    P = cp.Variable((n_edges, n_time), name="P_{ij,t}")
-    Q = cp.Variable((n_edges, n_time), name="Q_{ij,t}")
-    L = cp.Variable((n_edges, n_time), nonneg=True, name="L_{ij,t}")
+    P = cp.Variable((n_nodes, n_nodes, n_time), name="P_{ij,t}")
+    Q = cp.Variable((n_nodes, n_nodes, n_time), name="Q_{ij,t}")
+    L = cp.Variable((n_nodes, n_nodes, n_time), nonneg=True, name="L_{ij,t}")
     V = cp.Variable((n_nodes, n_time), name="V_{i,t}")
 
     delta_P_pos = cp.Variable((n_nodes, n_time), nonneg=True, name="delta^P_{i,t,+}")
@@ -118,11 +123,6 @@ def formulate_vpp_problem(
     delta_Q = delta_Q_pos - delta_Q_neg
 
     constraints: Dict[str, List[cp.Constraint]] = {}
-
-    # Boundary condition that at the root node, the grid voltage is stable at the reference value.
-    constraints["root_node_voltage"] = []
-    for t_idx in range(n_time):
-        constraints["root_node_voltage"].append(V[root_node_idx, t_idx] == v_0**2)
 
     constraints["voltage_bounds"] = []
     constraints["generator_apparent_power"] = []
@@ -184,48 +184,47 @@ def formulate_vpp_problem(
                 == e[j_idx, t_idx] - eta_batt * P_batt[j_idx, t_idx] * delta_t
             )
 
-    constraints["active_power_balance"] = []
-    constraints["reactive_power_balance"] = []
-    constraints["voltage_balance"] = []
+    constraints["active_power_balance"] = [P[0, 0, :] == 0.0]
+    constraints["reactive_power_balance"] = [Q[0, 0, :] == 0.0]
+    constraints["voltage_balance"] = [V[0, :] == v_0**2]
     constraints["thermal_limits"] = []
     constraints["current_relation_relaxed"] = []
-    for edge_idx, (i, j) in enumerate(edge_ids):
-        i_idx = node_to_idx[i]
-        j_idx = node_to_idx[j]
+    for node in node_ids:
+        j_idx = node_to_idx[node]
+        i_idx = node_to_idx[rho[node]]
 
-        child_terms = [P[edge_to_idx[(j, k)], :] for k in children_by_node[j]]
-        if child_terms:
-            downstream_p = cp.sum(cp.vstack(child_terms), axis=0)
-            downstream_q = cp.sum(
-                cp.vstack([Q[edge_to_idx[(j, k)], :] for k in children_by_node[j]]),
-                axis=0,
-            )
+        if j_idx == root_node_idx:
+            rij = 0
+            xij = 0
+            I_max_ij = 0
         else:
-            downstream_p = 0.0
-            downstream_q = 0.0
+            edge_idx = edge_to_idx[(rho[node], node)]
+            rij = r[edge_idx]
+            xij = x[edge_idx]
+            I_max_ij = I_max[edge_idx]
 
         # Active power balance constraint (1)
         constraints["active_power_balance"].append(
-            P[edge_idx, :]
+            P[i_idx, j_idx, :]
             == (
                 l_P[j_idx, :]
                 - p[j_idx, :]
                 - P_batt[j_idx, :]
-                + r[edge_idx] * L[edge_idx, :]
-                + downstream_p
+                + rij * L[i_idx, j_idx, :]
+                + A[j_idx, :] @ P[j_idx, :, :]
                 + delta_P[j_idx, :]
             )
         )
 
         # Reactive power balance constraint (2)
         constraints["reactive_power_balance"].append(
-            Q[edge_idx, :]
+            Q[i_idx, j_idx, :]
             == (
                 l_Q[j_idx, :]
                 - q[j_idx, :]
                 - Q_batt[j_idx, :]
-                + x[edge_idx] * L[edge_idx, :]
-                + downstream_q
+                + xij * L[i_idx, j_idx, :]
+                + A[j_idx, :] @ Q[j_idx, :, :]
                 + delta_Q[j_idx, :]
             )
         )
@@ -234,19 +233,20 @@ def formulate_vpp_problem(
         constraints["voltage_balance"].append(
             V[j_idx, :]
             == V[i_idx, :]
-            + (r[edge_idx] ** 2 + x[edge_idx] ** 2) * L[edge_idx, :]
-            - 2.0 * (r[edge_idx] * P[edge_idx, :] + x[edge_idx] * Q[edge_idx, :])
+            + (rij**2 + xij**2) * L[i_idx, j_idx, :]
+            - 2.0 * (rij * P[i_idx, j_idx, :] + xij * Q[i_idx, j_idx, :])
         )
 
         # Thermal limit constraint (9)
-        constraints["thermal_limits"].append(L[edge_idx, :] <= I_max[edge_idx] ** 2)
+        constraints["thermal_limits"].append(L[i_idx, j_idx, :] <= I_max_ij**2)
 
         # Current relation, relaxed (4)
         for t_idx in range(n_time):
             constraints["current_relation_relaxed"].append(
-                L[edge_idx, t_idx]
+                L[i_idx, j_idx, t_idx]
                 >= cp.quad_over_lin(
-                    cp.vstack([P[edge_idx, t_idx], Q[edge_idx, t_idx]]), V[i_idx, t_idx]
+                    cp.hstack([P[i_idx, j_idx, t_idx], Q[i_idx, j_idx, t_idx]]),
+                    V[i_idx, t_idx],
                 )
             )
 
@@ -315,7 +315,6 @@ def _validate_inputs(
     n_edges: int,
     n_time: int,
     rho: Mapping[int, int],
-    A: np.ndarray,
     l_P: np.ndarray,
     l_Q: np.ndarray,
     c: np.ndarray,
@@ -331,8 +330,6 @@ def _validate_inputs(
         raise ValueError("E cannot be empty.")
     if n_time == 0:
         raise ValueError("T cannot be empty.")
-    if A.shape != (n_nodes, n_nodes):
-        raise ValueError("A must have shape (|N|, |N|).")
     if l_P.shape != (n_nodes, n_time):
         raise ValueError("l_P must have shape (|N|, |T|).")
     if l_Q.shape != (n_nodes, n_time):
