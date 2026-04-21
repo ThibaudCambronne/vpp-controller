@@ -1,0 +1,332 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any, Dict, List, Mapping, Sequence, Tuple
+
+import cvxpy as cp
+import numpy as np
+
+
+@dataclass(frozen=True)
+class VPPFormulation:
+    """Container for a formulated VPP optimization problem."""
+
+    problem: cp.Problem
+    variables: Dict[str, Any]
+    constraints: Dict[str, List[cp.Constraint]]
+    dimensions: Dict[str, int]
+
+
+def formulate_vpp_problem(
+    N: Sequence[int],
+    E: Sequence[Tuple[int, int]],
+    T: np.ndarray,
+    rho: Mapping[int, int],
+    A: np.ndarray,
+    l_P: np.ndarray,
+    l_Q: np.ndarray,
+    c: np.ndarray,
+    s_max: np.ndarray,
+    r: np.ndarray,
+    x: np.ndarray,
+    I_max: np.ndarray,
+    v_min: float,
+    v_max: float,
+    eta_batt: float,
+    alpha: float,
+    delta_t: float,
+    e_0: float,
+    e_batt_max: float,
+    mu_P: float,
+    mu_Q: float,
+    v_0: float = 1.0,
+) -> VPPFormulation:
+    """
+    Build the convex OPF + battery placement model with LaTeX-aligned symbols.
+
+    Variable keys in the returned dictionary intentionally match paper notation:
+    - p_{i,t}, q_{i,t}, s_{i,t}, P_{ij,t}, Q_{ij,t}, L_{ij,t}, V_{i,t}
+    - delta^P_{i,t}, delta^Q_{i,t}
+    - P^{batt}_{j,t}, Q^{batt}_{j,t}, S^{batt}_{j,t}, e_{j,t}
+    - P^{batt}_{j,max}, e^{batt}_{j,max}
+    """
+
+    node_ids = list(N)
+    edge_ids = list(E)
+    time_ids = list(T)
+
+    n_nodes = len(node_ids)
+    n_edges = len(edge_ids)
+    n_time = len(time_ids)
+
+    _validate_inputs(
+        n_nodes=n_nodes,
+        n_edges=n_edges,
+        n_time=n_time,
+        rho=rho,
+        A=A,
+        l_P=l_P,
+        l_Q=l_Q,
+        c=c,
+        s_max=s_max,
+        r=r,
+        x=x,
+        I_max=I_max,
+    )
+
+    node_to_idx = {node: idx for idx, node in enumerate(node_ids)}
+    edge_to_idx = {(i, j): idx for idx, (i, j) in enumerate(edge_ids)}
+
+    children_by_node: Dict[int, List[int]] = {node: [] for node in node_ids}
+    parent_edge_by_node: Dict[int, int] = {}
+    for edge_idx, (i, j) in enumerate(edge_ids):
+        children_by_node[i].append(j)
+        parent_edge_by_node[j] = edge_idx
+
+    root_candidates = [node for node in node_ids if node not in parent_edge_by_node]
+    if len(root_candidates) != 1:
+        raise ValueError("Expected exactly one root node in radial feeder.")
+    root_node = root_candidates[0]
+
+    p = cp.Variable((n_nodes, n_time), nonneg=True, name="p_{i,t}")
+    q = cp.Variable((n_nodes, n_time), nonneg=True, name="q_{i,t}")
+    s = cp.Variable((n_nodes, n_time), nonneg=True, name="s_{i,t}")
+
+    P = cp.Variable((n_edges, n_time), name="P_{ij,t}")
+    Q = cp.Variable((n_edges, n_time), name="Q_{ij,t}")
+    L = cp.Variable((n_edges, n_time), nonneg=True, name="L_{ij,t}")
+    V = cp.Variable((n_nodes, n_time), name="V_{i,t}")
+
+    delta_P_pos = cp.Variable((n_nodes, n_time), nonneg=True, name="delta^P_{i,t,+}")
+    delta_P_neg = cp.Variable((n_nodes, n_time), nonneg=True, name="delta^P_{i,t,-}")
+    delta_Q_pos = cp.Variable((n_nodes, n_time), nonneg=True, name="delta^Q_{i,t,+}")
+    delta_Q_neg = cp.Variable((n_nodes, n_time), nonneg=True, name="delta^Q_{i,t,-}")
+
+    P_batt = cp.Variable((n_nodes, n_time), name="P^{batt}_{j,t}")
+    Q_batt = cp.Variable((n_nodes, n_time), name="Q^{batt}_{j,t}")
+    S_batt = cp.Variable((n_nodes, n_time), nonneg=True, name="S^{batt}_{j,t}")
+    e = cp.Variable((n_nodes, n_time + 1), name="e_{j,t}")
+
+    P_batt_max = cp.Variable(n_nodes, nonneg=True, name="P^{batt}_{j,max}")
+    e_batt_max_by_node = cp.Variable(n_nodes, nonneg=True, name="e^{batt}_{j,max}")
+
+    delta_P = delta_P_pos - delta_P_neg
+    delta_Q = delta_Q_pos - delta_Q_neg
+
+    constraints: Dict[str, List[cp.Constraint]] = {
+        "active_power_balance": [],
+        "reactive_power_balance": [],
+        "voltage_balance": [],
+        "current_relation_relaxed": [],
+        "generator_apparent_power": [],
+        "generation_cap": [],
+        "voltage_bounds": [],
+        "thermal_limits": [],
+        "slack_bus_voltage": [],
+        "battery_energy_dynamics": [],
+        "battery_energy_limits": [],
+        "battery_cycle": [],
+        "battery_inverter_apparent_power": [],
+        "battery_inverter_capacity": [],
+        "battery_energy_power_link": [],
+        "battery_total_capacity": [],
+    }
+
+    for t_idx in range(n_time):
+        constraints["slack_bus_voltage"].append(
+            V[node_to_idx[root_node], t_idx] == v_0**2
+        )
+
+    for node in node_ids:
+        j_idx = node_to_idx[node]
+        for t_idx in range(n_time):
+            constraints["voltage_bounds"].append(V[j_idx, t_idx] >= v_min**2)
+            constraints["voltage_bounds"].append(V[j_idx, t_idx] <= v_max**2)
+            constraints["generator_apparent_power"].append(
+                cp.norm(cp.hstack([p[j_idx, t_idx], q[j_idx, t_idx]]), 2)
+                <= s[j_idx, t_idx]
+            )
+            constraints["generation_cap"].append(s[j_idx, t_idx] <= s_max[j_idx])
+            constraints["battery_inverter_apparent_power"].append(
+                cp.norm(cp.hstack([P_batt[j_idx, t_idx], Q_batt[j_idx, t_idx]]), 2)
+                <= S_batt[j_idx, t_idx]
+            )
+            constraints["battery_inverter_capacity"].append(
+                S_batt[j_idx, t_idx] <= P_batt_max[j_idx]
+            )
+            constraints["battery_energy_limits"].append(e[j_idx, t_idx] >= 0.0)
+            constraints["battery_energy_limits"].append(
+                e[j_idx, t_idx] <= e_batt_max_by_node[j_idx]
+            )
+
+        constraints["battery_energy_limits"].append(e[j_idx, n_time] >= 0.0)
+        constraints["battery_energy_limits"].append(
+            e[j_idx, n_time] <= e_batt_max_by_node[j_idx]
+        )
+
+        constraints["battery_cycle"].append(e[j_idx, 0] == e_0)
+        constraints["battery_cycle"].append(e[j_idx, n_time] == e_0)
+
+        for t_idx in range(n_time):
+            constraints["battery_energy_dynamics"].append(
+                e[j_idx, t_idx + 1]
+                == e[j_idx, t_idx] - eta_batt * P_batt[j_idx, t_idx] * delta_t
+            )
+
+    for edge_idx, (i, j) in enumerate(edge_ids):
+        i_idx = node_to_idx[i]
+        j_idx = node_to_idx[j]
+
+        child_terms = [P[edge_to_idx[(j, k)], :] for k in children_by_node[j]]
+        if child_terms:
+            downstream_p = cp.sum(cp.vstack(child_terms), axis=0)
+            downstream_q = cp.sum(
+                cp.vstack([Q[edge_to_idx[(j, k)], :] for k in children_by_node[j]]),
+                axis=0,
+            )
+        else:
+            downstream_p = 0.0
+            downstream_q = 0.0
+
+        constraints["active_power_balance"].append(
+            P[edge_idx, :]
+            == (
+                l_P[j_idx, :]
+                - p[j_idx, :]
+                - P_batt[j_idx, :]
+                + r[edge_idx] * L[edge_idx, :]
+                + downstream_p
+                + delta_P[j_idx, :]
+            )
+        )
+
+        constraints["reactive_power_balance"].append(
+            Q[edge_idx, :]
+            == (
+                l_Q[j_idx, :]
+                - q[j_idx, :]
+                - Q_batt[j_idx, :]
+                + x[edge_idx] * L[edge_idx, :]
+                + downstream_q
+                + delta_Q[j_idx, :]
+            )
+        )
+
+        constraints["voltage_balance"].append(
+            V[j_idx, :]
+            == V[i_idx, :]
+            + (r[edge_idx] ** 2 + x[edge_idx] ** 2) * L[edge_idx, :]
+            - 2.0 * (r[edge_idx] * P[edge_idx, :] + x[edge_idx] * Q[edge_idx, :])
+        )
+
+        constraints["thermal_limits"].append(L[edge_idx, :] <= I_max[edge_idx] ** 2)
+
+        for t_idx in range(n_time):
+            constraints["current_relation_relaxed"].append(
+                cp.norm(
+                    cp.hstack(
+                        [
+                            2.0 * P[edge_idx, t_idx],
+                            2.0 * Q[edge_idx, t_idx],
+                            L[edge_idx, t_idx] - V[i_idx, t_idx],
+                        ]
+                    ),
+                    2,
+                )
+                <= L[edge_idx, t_idx] + V[i_idx, t_idx]
+            )
+
+    for node in node_ids:
+        j_idx = node_to_idx[node]
+        constraints["battery_energy_power_link"].append(
+            e_batt_max_by_node[j_idx] == alpha * P_batt_max[j_idx]
+        )
+
+    constraints["battery_total_capacity"].append(
+        cp.sum(e_batt_max_by_node) <= e_batt_max
+    )
+
+    generation_cost = cp.sum(cp.multiply(c, s))
+    imbalance_cost = mu_P * cp.sum(delta_P_pos + delta_P_neg) + mu_Q * cp.sum(
+        delta_Q_pos + delta_Q_neg
+    )
+    objective = cp.Minimize(generation_cost + imbalance_cost)
+
+    all_constraints = [con for group in constraints.values() for con in group]
+    problem = cp.Problem(objective, all_constraints)
+
+    variables: Dict[str, Any] = {
+        "p_{i,t}": p,
+        "q_{i,t}": q,
+        "s_{i,t}": s,
+        "P_{ij,t}": P,
+        "Q_{ij,t}": Q,
+        "L_{ij,t}": L,
+        "V_{i,t}": V,
+        "delta^P_{i,t}": delta_P,
+        "delta^Q_{i,t}": delta_Q,
+        "delta^P_{i,t,+}": delta_P_pos,
+        "delta^P_{i,t,-}": delta_P_neg,
+        "delta^Q_{i,t,+}": delta_Q_pos,
+        "delta^Q_{i,t,-}": delta_Q_neg,
+        "P^{batt}_{j,t}": P_batt,
+        "Q^{batt}_{j,t}": Q_batt,
+        "S^{batt}_{j,t}": S_batt,
+        "e_{j,t}": e,
+        "P^{batt}_{j,max}": P_batt_max,
+        "e^{batt}_{j,max}": e_batt_max_by_node,
+    }
+
+    dimensions = {
+        "|N|": n_nodes,
+        "|E|": n_edges,
+        "|T|": n_time,
+        "root_node": int(root_node),
+    }
+
+    return VPPFormulation(
+        problem=problem,
+        variables=variables,
+        constraints=constraints,
+        dimensions=dimensions,
+    )
+
+
+def _validate_inputs(
+    n_nodes: int,
+    n_edges: int,
+    n_time: int,
+    rho: Mapping[int, int],
+    A: np.ndarray,
+    l_P: np.ndarray,
+    l_Q: np.ndarray,
+    c: np.ndarray,
+    s_max: np.ndarray,
+    r: np.ndarray,
+    x: np.ndarray,
+    I_max: np.ndarray,
+) -> None:
+    if n_nodes == 0:
+        raise ValueError("N cannot be empty.")
+    if n_edges == 0:
+        raise ValueError("E cannot be empty.")
+    if n_time == 0:
+        raise ValueError("T cannot be empty.")
+    if A.shape != (n_nodes, n_nodes):
+        raise ValueError("A must have shape (|N|, |N|).")
+    if l_P.shape != (n_nodes, n_time):
+        raise ValueError("l_P must have shape (|N|, |T|).")
+    if l_Q.shape != (n_nodes, n_time):
+        raise ValueError("l_Q must have shape (|N|, |T|).")
+    if c.shape != (n_nodes, n_time):
+        raise ValueError("c must have shape (|N|, |T|).")
+    if s_max.shape != (n_nodes,):
+        raise ValueError("s_max must have shape (|N|,).")
+    if r.shape != (n_edges,):
+        raise ValueError("r must have shape (|E|,).")
+    if x.shape != (n_edges,):
+        raise ValueError("x must have shape (|E|,).")
+    if I_max.shape != (n_edges,):
+        raise ValueError("I_max must have shape (|E|,).")
+    if len(rho) != n_nodes:
+        raise ValueError("rho must contain one entry per node.")
