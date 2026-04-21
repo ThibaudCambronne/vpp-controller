@@ -12,18 +12,19 @@ def test_1():
     because of congestion on the line between node 1 and node 2.
 
     The test checks that the battery is indeed placed at node 2, and that the cycle constraint is satisfied.
+
+    Model:      |0| --(3 MW)--> |1| --(0.5 MW)--> |2|
+    demand t1:   0 MW            1 MW              0 MW
+    demand t2:   0 MW            0.5 MW            1 MW
     """
     T = 2
     hours = np.arange(T)
     n_set = [0, 1, 2]
     e_set = [(0, 1), (1, 2)]
-    adjacency = np.zeros((3, 3))
-    adjacency[0, 1] = 1
-    adjacency[1, 2] = 1
 
-    rho = {0: -1, 1: 0, 2: 1}
+    rho = {0: 0, 1: 0, 2: 1}
 
-    l_p = np.array([[0, 0], [1, 1], [0, 1]])
+    l_p = np.array([[0, 0], [1, 0.5], [0, 1]])
     l_q = 0 * l_p
 
     c0 = np.array(
@@ -31,17 +32,16 @@ def test_1():
     )
     c = np.vstack([c0, np.zeros_like(c0), np.zeros_like(c0)])
 
-    I_max = np.array([2.0, 1.2])
+    I_max = np.array([3.0, 0.5])
 
-    battery_duration = 4.0  # hours
-    max_energy_capacity = 1 * battery_duration
+    battery_duration = 2.0  # hours
+    max_energy_capacity = 0.7 * battery_duration
 
     formulation = formulate_vpp_problem(
         N=n_set,
         E=e_set,
         T=hours,
         rho=rho,
-        A=adjacency,
         l_P=l_p,
         l_Q=l_q,
         c=c,
@@ -62,6 +62,31 @@ def test_1():
     )
 
     result = run_test_case_and_solve(formulation)
+
+    # Check that battery is placed at node 2
+    P_batt_j_max = result.variables["P^{batt}_{j,max}"]
+    assert P_batt_j_max[2] > 0.45, (
+        "Battery of around 0.5 MW should be placed at node 2."
+    )
+
+    # Check that node battery charges around 0.5 MW at t=1 and discharges at t=2
+    P_batt = result.variables["P^{batt}_{j,t}"]
+    assert P_batt[2, 0] < -0.45, "Battery should charge around 0.5 MW at t=0."
+    assert P_batt[2, 1] > 0.45, "Battery should discharge around 0.5 MW at t=1."
+
+    # Check that there is only generation at node 0 that is above 1.5 MW at t=0
+    # to supply 1MW of demand of node 0, 0.5 MW of battery charge for node 2, around 0.2 MW of battery charge for node 1 because
+    # electricity is cheaper at t=0 than t=1
+    s = result.variables["s_{i,t}"]
+    assert s[0, 0] > 1.7, "Generation at node 0 should be around 1.5 MW at t=0."
+    assert s[0, 1] > 0.6, "Generation at node 0 should be around 1 MW at t=1."
+    assert np.all(s[1:, :] < 1e-5), "There should be no generation at nodes 1 and 2."
+
+    # assert that there is congestion on the second edge at t=1,
+    # because we need to charge the battery there to meet the demand at t=2
+    assert (result.duals["thermal_limits"][2] >= 1).all(), (
+        "There should be congestion on the line between node 1 and node 2 at t=1."
+    )
 
 
 def run_test_case_and_solve(formulation: VPPFormulation) -> DayOptimizationResult:
@@ -114,6 +139,10 @@ def run_test_case_and_solve(formulation: VPPFormulation) -> DayOptimizationResul
 
     e = result.variables["e_{j,t}"]
     assert e.shape == (3, T + 1), "Unexpected SOC dimensions for 3-node test case."
+
+    assert np.isclose(e[0, :], 0.0).all(), (
+        "Battery SOC at node 0 should be zero in 3-node test case."
+    )
 
     cycle_gap = np.max(np.abs(e[:, 0] - e[:, -1]))
     assert cycle_gap <= 1e-5, "Battery cycle constraint failed in 3-node test case."
