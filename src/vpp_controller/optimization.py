@@ -74,8 +74,9 @@ def formulate_vpp_problem(
     )
 
     node_to_idx = {node: idx for idx, node in enumerate(node_ids)}
-    edge_to_idx = {(i, j): idx for idx, (i, j) in enumerate(edge_ids)}
-
+    edge_to_idx = {(i, j): idx for idx, (i, j) in enumerate(edge_ids)} 
+    
+    
     # construct adjency matrix
     A = np.zeros((n_nodes, n_nodes))
     for i in node_ids:

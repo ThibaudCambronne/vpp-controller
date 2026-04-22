@@ -28,11 +28,16 @@ class DayOptimizationResult:
     duals: Dict[str, list[np.ndarray]]
     diagnostics: Dict[str, Any]
 
+
 # TODO: Define unit of battery capacity
 def run_day_optimization(
-    day: str,
+    topology_df: pd.DataFrame,
+    demand_df: pd.DataFrame,
+    price_df: pd.DataFrame,
     total_battery_capacity: float,
-    network_ieee_case: str,
+    # day: str,
+    # total_battery_capacity: float,
+    # network_ieee_case: str,
 ) -> DayOptimizationResult:
     """
     Run optimization for one day.
@@ -40,14 +45,16 @@ def run_day_optimization(
 
     # providers = _load_provider_module("vpp_controller.data_sources")
 
-    topology_df = pd.read_csv(f"data/{network_ieee_case}.csv")
-    print(topology_df)
+    # topology_df = pd.read_csv(f"data/{network_ieee_case}.csv")
+    # print(topology_df)
     # providers.get_network_topology_and_parameters(network_ieee_case)
     # demand_df = providers.get_daily_node_demand(day, network_ieee_case)
-    
-    
-    price_series = providers.get_daily_price_curve(day, network_ieee_case)
 
+    # price_series = providers.get_daily_price_curve(day, network_ieee_case)
+    
+    # Get price_series from price_df column "$/MW"
+    price_series = price_df["$/MW"].to_numpy(dtype=float)
+    
     model_inputs = _build_model_inputs(
         topology_df=topology_df,
         demand_df=demand_df,
@@ -135,7 +142,7 @@ def _build_model_inputs(
     for i, j in edges:
         A[int(i), int(j)] = 1.0
 
-    rho = {int(i): -1 for i in nodes}
+    rho = {int(i): 0 for i in nodes}
     for i, j in edges:
         rho[int(j)] = int(i)
 
@@ -160,7 +167,7 @@ def _build_model_inputs(
         "E": edges,
         "T": list(range(hourly_l_P.shape[1])),
         "rho": rho,
-        "A": A,
+        # "A": A,
         "l_P": hourly_l_P,
         "l_Q": hourly_l_Q,
         "c": c,
@@ -171,7 +178,7 @@ def _build_model_inputs(
         "v_min": v_min,
         "v_max": v_max,
         "eta_batt": 0.95,
-        "alpha": 4.0,
+        "alpha": 2.0,
         "delta_t": 1.0,
         "e_0": 0.0,
         "e_batt_max": float(total_battery_capacity),
