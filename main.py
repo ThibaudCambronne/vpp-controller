@@ -9,6 +9,10 @@ import pandas as pd
 from src.vpp_controller.demand_data import create_all_nodes_demand
 from src.vpp_controller.paths import DATA_DIR
 from src.vpp_controller.runner import run_day_optimization
+from src.results_format import save_day_optimization_result
+
+
+
 
 
 def main() -> None:
@@ -34,10 +38,13 @@ def main() -> None:
     for key, value in dayOptResults.variables.items():
         print(f" {key}: {value.round(1)}")
 
-    # save dayOptResults to csv
-    variables_df = pd.DataFrame(dayOptResults.variables.items())
-    variables_df.to_csv("day_optimization_results.csv", index=False)
-    pass
+    dayOptResults.variables["P_{ij,t}"][1,0, :].round(2)
+
+    dayOptResults.variables["P_{ij,t}"][:,:, 0].round(2)
+
+    metadata_path, variables_path = save_day_optimization_result(dayOptResults)
+    print(f"Saved metadata to: {metadata_path}")
+    print(f"Saved variables to: {variables_path}")
 
 
 if __name__ == "__main__":
