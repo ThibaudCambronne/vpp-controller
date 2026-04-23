@@ -23,10 +23,12 @@ def main() -> None:
     price_df = price_df.sort_values(by="OPR_HR").reset_index(drop=True)
     print(price_df)
 
-    demand_df = create_all_nodes_demand(topology_df, "fall")
+    demand_df = create_all_nodes_demand(topology_df, "fall", factor=.7)
     demand_df = demand_df.rename(columns={"P_demand": "l_P", "Q_demand": "l_Q"})
     demand_df["hour"] = pd.to_datetime(demand_df["timestamp"]).dt.hour
     demand_df = demand_df[["node", "hour", "l_P", "l_Q"]]
+    
+    print(demand_df)
 
     dayOptResults = run_day_optimization(
         topology_df=topology_df,

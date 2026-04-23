@@ -56,15 +56,15 @@ def build_season_base_demand(
     ].reset_index(drop=True)
 
 
-def create_node_demand(node_row: pd.Series, base_demand: np.ndarray) -> pd.DataFrame:
+def create_node_demand(node_row: pd.Series, base_demand: np.ndarray, factor=1) -> pd.DataFrame:
     """
     Build noisy P/Q demand trajectories for one node.
 
     Returns DataFrame columns: node, P_demand, Q_demand.
     """
     node = node_row["node"]
-    p_mean = node_row["l_P"]
-    q_mean = node_row["l_Q"]
+    p_mean = node_row["l_P"]*factor
+    q_mean = node_row["l_Q"]*factor
 
     p_scaled = (base_demand / base_demand.mean()) * p_mean
     q_scaled = (base_demand / base_demand.mean()) * q_mean
@@ -90,6 +90,7 @@ def create_node_demand(node_row: pd.Series, base_demand: np.ndarray) -> pd.DataF
 def create_all_nodes_demand(
     nodes_df: pd.DataFrame,
     season: str,
+    factor = 1.0,
     seasonal_base_df: pd.DataFrame | None = None,
     demand_file_path: str | Path | None = None,
 ) -> pd.DataFrame:
@@ -117,7 +118,7 @@ def create_all_nodes_demand(
 
     all_nodes = []
     for _, node_row in nodes_df.iterrows():
-        df_node = create_node_demand(node_row, base_demand)
+        df_node = create_node_demand(node_row, base_demand, factor)
         df_node.insert(0, "timestamp", timestamps)
         all_nodes.append(df_node)
 
