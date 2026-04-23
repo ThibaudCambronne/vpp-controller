@@ -264,7 +264,7 @@ def formulate_vpp_problem(
     # No battery at root node
     constraints["no_battery_at_root"] = [e_batt_max_by_node[root_node_idx] == 0.0]
 
-    generation_cost = cp.sum(cp.multiply(c, p))
+    generation_cost = cp.sum(cp.multiply(c, s))
     imbalance_cost = mu_P * cp.sum(delta_P_pos + delta_P_neg) + mu_Q * cp.sum(
         delta_Q_pos + delta_Q_neg
     )
