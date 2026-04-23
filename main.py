@@ -27,7 +27,7 @@ def main() -> None:
     dayOptResults = run_day_optimization(
         topology_df=topology_df,
         demand_df=demand_df,
-        price_df=price_df,
+        price_df_root_node=price_df,
         total_battery_capacity=20.0,
     )
 

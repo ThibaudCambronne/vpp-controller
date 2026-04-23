@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import ast
-import importlib
 from dataclasses import dataclass
 from typing import Any, Dict, Tuple, cast
 
@@ -11,13 +10,6 @@ import pandas as pd
 
 from .optimization import formulate_vpp_problem
 
-REQUIRED_PROVIDER_FUNCTIONS = (
-    "get_network_topology_and_parameters",
-    "get_daily_node_demand",
-    "get_daily_price_curve",
-)
-
-# TODO add prices to DayOptimizationResult
 @dataclass(frozen=True)
 class DayOptimizationResult:
     """Structured outputs for a solved day-level optimization."""
@@ -34,7 +26,7 @@ class DayOptimizationResult:
 def run_day_optimization(
     topology_df: pd.DataFrame,
     demand_df: pd.DataFrame,
-    price_df: pd.DataFrame,
+    price_df_root_node: pd.DataFrame,
     total_battery_capacity: float,
     # day: str,
     # total_battery_capacity: float,
@@ -44,22 +36,13 @@ def run_day_optimization(
     Run optimization for one day.
     """
 
-    # providers = _load_provider_module("vpp_controller.data_sources")
-
-    # topology_df = pd.read_csv(f"data/{network_ieee_case}.csv")
-    # print(topology_df)
-    # providers.get_network_topology_and_parameters(network_ieee_case)
-    # demand_df = providers.get_daily_node_demand(day, network_ieee_case)
-
-    # price_series = providers.get_daily_price_curve(day, network_ieee_case)
-    
     # Get price_series from price_df column "$/MW"
-    price_series = price_df["$/MW"].to_numpy(dtype=float)
-    
-    model_inputs = _build_model_inputs(
+    price_series = price_df_root_node["$/MW"]
+
+    model_inputs = build_model_inputs(
         topology_df=topology_df,
         demand_df=demand_df,
-        price_series=price_series,
+        price_series_root_node=price_series,
         total_battery_capacity=total_battery_capacity,
     )
 
@@ -92,30 +75,11 @@ def run_day_optimization(
     )
 
 
-def _load_provider_module(module_name: str):
-    try:
-        module = importlib.import_module(module_name)
-    except ModuleNotFoundError as exc:
-        required = ", ".join(REQUIRED_PROVIDER_FUNCTIONS)
-        raise NotImplementedError(
-            f"Missing provider module '{module_name}'. Add it with functions: {required}."
-        ) from exc
-
-    missing = [fn for fn in REQUIRED_PROVIDER_FUNCTIONS if not hasattr(module, fn)]
-    if missing:
-        missing_str = ", ".join(missing)
-        raise NotImplementedError(
-            f"Provider module '{module_name}' is missing functions: {missing_str}."
-        )
-
-    return module
-
-
-def _build_model_inputs(
+def build_model_inputs(
     *,
     topology_df: pd.DataFrame,
     demand_df: pd.DataFrame,
-    price_series: pd.Series | np.ndarray,
+    price_series_root_node: pd.Series | np.ndarray,
     total_battery_capacity: float,
 ) -> Dict[str, Any]:
     node_col = _detect_node_column(topology_df)
@@ -139,17 +103,13 @@ def _build_model_inputs(
                 x_list.append(float(x_matrix[i, j]))
                 i_max_list.append(float(i_max_matrix[i, j]))
 
-    A = np.zeros((n_nodes, n_nodes))
-    for i, j in edges:
-        A[int(i), int(j)] = 1.0
-
     rho = {int(i): 0 for i in nodes}
     for i, j in edges:
         rho[int(j)] = int(i)
 
     hourly_l_P, hourly_l_Q = _extract_hourly_demand(demand_df, n_nodes=n_nodes)
 
-    price = np.asarray(price_series, dtype=float).reshape(-1)
+    price = np.asarray(price_series_root_node, dtype=float).reshape(-1)
     if price.shape[0] != hourly_l_P.shape[1]:
         raise ValueError("Price curve length must match number of time steps.")
 
@@ -161,14 +121,19 @@ def _build_model_inputs(
         raise ValueError("s_max length does not match number of nodes.")
 
     v_min = float(topology_df["v_min"].iloc[0])
+    assert (topology_df["v_min"] == v_min).all(), (
+        "All v_min values must be the same in the network."
+    )
     v_max = float(topology_df["v_max"].iloc[0])
+    assert (topology_df["v_max"] == v_max).all(), (
+        "All v_max values must be the same in the network."
+    )
 
     return {
         "N": list(nodes),
         "E": edges,
         "T": list(range(hourly_l_P.shape[1])),
         "rho": rho,
-        # "A": A,
         "l_P": hourly_l_P,
         "l_Q": hourly_l_Q,
         "c": c,
