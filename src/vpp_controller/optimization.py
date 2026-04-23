@@ -74,9 +74,8 @@ def formulate_vpp_problem(
     )
 
     node_to_idx = {node: idx for idx, node in enumerate(node_ids)}
-    edge_to_idx = {(i, j): idx for idx, (i, j) in enumerate(edge_ids)} 
-    
-    
+    edge_to_idx = {(i, j): idx for idx, (i, j) in enumerate(edge_ids)}
+
     # construct adjency matrix
     A = np.zeros((n_nodes, n_nodes))
     for i in node_ids:
@@ -265,7 +264,7 @@ def formulate_vpp_problem(
     # No battery at root node
     constraints["no_battery_at_root"] = [e_batt_max_by_node[root_node_idx] == 0.0]
 
-    generation_cost = cp.sum(cp.multiply(c, s))
+    generation_cost = cp.sum(cp.multiply(c, p))
     imbalance_cost = mu_P * cp.sum(delta_P_pos + delta_P_neg) + mu_Q * cp.sum(
         delta_Q_pos + delta_Q_neg
     )
