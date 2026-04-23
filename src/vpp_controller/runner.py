@@ -17,7 +17,7 @@ REQUIRED_PROVIDER_FUNCTIONS = (
     "get_daily_price_curve",
 )
 
-
+# TODO add prices to DayOptimizationResult
 @dataclass(frozen=True)
 class DayOptimizationResult:
     """Structured outputs for a solved day-level optimization."""
@@ -27,6 +27,7 @@ class DayOptimizationResult:
     variables: Dict[str, np.ndarray]
     duals: Dict[str, list[np.ndarray]]
     diagnostics: Dict[str, Any]
+    
 
 
 # TODO: Define unit of battery capacity
