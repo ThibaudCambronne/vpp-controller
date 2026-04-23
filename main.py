@@ -1,23 +1,21 @@
-from pathlib import Path
-import sys
-import numpy as np
 import pandas as pd
 
-
-ROOT = Path(__file__).resolve().parent
-SRC = ROOT / "src"
-if str(SRC) not in sys.path:
-    sys.path.insert(0, str(SRC))
-
-from vpp_controller.demand_data import create_all_nodes_demand
-from vpp_controller.runner import run_day_optimization
+# import sys
+# from pathlib import Path
+# ROOT = Path(__file__).resolve().parent
+# SRC = ROOT / "src"
+# if str(SRC) not in sys.path:
+#     sys.path.insert(0, str(SRC))
+from src.vpp_controller.demand_data import create_all_nodes_demand
+from src.vpp_controller.paths import DATA_DIR
+from src.vpp_controller.runner import run_day_optimization
 
 
 def main() -> None:
-    topology_df = pd.read_csv(ROOT / "data" / "homework3bus no gen.csv")
+    topology_df = pd.read_csv(DATA_DIR / "homework3bus no gen.csv")
     print(topology_df)
-    
-    price_df = pd.read_csv(ROOT / "data" / "pricedf_0096WD_7_N001_fall_2025_10_10.csv")
+
+    price_df = pd.read_csv(DATA_DIR / "pricedf_0096WD_7_N001_fall_2025_10_10.csv")
     price_df = price_df.sort_values(by="OPR_HR").reset_index(drop=True)
     print(price_df)
 
