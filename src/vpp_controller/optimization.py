@@ -132,6 +132,7 @@ def formulate_vpp_problem(
     constraints["battery_energy_limits"] = []
     constraints["battery_cycle"] = []
     constraints["battery_energy_dynamics"] = []
+    constraints["battery_no_reactive_power"] = []
     for node in node_ids:
         j_idx = node_to_idx[node]  # node index in 0-based ordering
         for t_idx in range(n_time):
@@ -155,6 +156,10 @@ def formulate_vpp_problem(
                 cp.norm(cp.hstack([P_batt[j_idx, t_idx], Q_batt[j_idx, t_idx]]), 2)
                 <= S_batt[j_idx, t_idx]
             )
+
+            # TODO: test
+            # Battery inverter apparent power definition, relaxed (13)
+            constraints["battery_no_reactive_power"].append(Q_batt[j_idx, t_idx] == 0.0)
 
             # Battery inverter capacity (14)
             constraints["battery_inverter_capacity"].append(
