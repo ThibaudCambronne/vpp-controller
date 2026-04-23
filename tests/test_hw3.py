@@ -4,7 +4,6 @@ import pandas as pd
 from vpp_controller.optimization import formulate_vpp_problem
 from vpp_controller.paths import DATA_DIR
 from vpp_controller.runner import (
-    DayOptimizationResult,
     build_model_inputs,
     solve_formulation_problem,
 )
@@ -40,21 +39,9 @@ def test_hw3():
     formulation = formulate_vpp_problem(**model_inputs)
     solve_formulation_problem(formulation.problem)
 
-    duals = {
-        group: [np.array(con.dual_value) for con in group_constraints]
-        for group, group_constraints in formulation.constraints.items()
-    }
-
     variables = {
         name: np.array(var.value) if hasattr(var, "value") else np.array(var)
         for name, var in formulation.variables.items()
-    }
-
-    diagnostics = {
-        "solver": formulation.problem.solver_stats.solver_name,
-        "solve_time": formulation.problem.solver_stats.solve_time,
-        "num_iters": formulation.problem.solver_stats.num_iters,
-        "dimensions": formulation.dimensions,
     }
 
     # Check results against expected values from hw 3
@@ -78,8 +65,6 @@ def test_hw3():
         atol=0.001,
     ).all()
 
-    # Node   ||  0   |  1   |  2   |  3   |  4   |  5   |  6   |  7   |  8   |  9   |  10  |  11  |  12  |
-    # Voltage||1.000 |0.967 |0.963 |0.963 |0.962 |0.960 |0.957 |0.957 |0.957 |0.964 |0.955 |0.954 |0.953 |
     assert np.isclose(
         variables["V_{i,t}"][:, 0],
         np.array(
@@ -98,14 +83,7 @@ def test_hw3():
                 0.954,
                 0.953,
             ]
-        ),
+        )
+        ** 2,
         atol=0.001,
     ).all()
-
-    result = DayOptimizationResult(
-        status=formulation.problem.status,
-        objective_value=formulation.problem.value,
-        variables=variables,
-        duals=duals,
-        diagnostics=diagnostics,
-    )
