@@ -16,8 +16,7 @@ from vpp_controller.runner import run_day_optimization
 def main() -> None:
     topology_df = pd.read_csv(ROOT / "data" / "homework3bus no gen.csv")
     print(topology_df)
-    c = [100.0, 0.0, 0.0, 150.0, 0.0, 0.0, 0.0, 0.0, 0.0, 50.0, 0.0, 0.0, 0.0]
-
+    
     price_df = pd.read_csv(ROOT / "data" / "pricedf_0096WD_7_N001_fall_2025_10_10.csv")
     price_df = price_df.sort_values(by="OPR_HR").reset_index(drop=True)
     print(price_df)

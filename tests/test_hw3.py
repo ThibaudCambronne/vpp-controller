@@ -17,4 +17,4 @@ from vpp_controller.demand_data import (
 def test_hw3():
     topology_df = pd.read_csv(f"data/homework3bus.csv")
     print(topology_df)
-    prices = 
+    prices = c = [100.0, 0.0, 0.0, 150.0, 0.0, 0.0, 0.0, 0.0, 0.0, 50.0, 0.0, 0.0, 0.0]
