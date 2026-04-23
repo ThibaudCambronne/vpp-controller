@@ -24,16 +24,19 @@ def main() -> None:
     demand_df["hour"] = pd.to_datetime(demand_df["timestamp"]).dt.hour
     demand_df = demand_df[["node", "hour", "l_P", "l_Q"]]
 
-    day_opt_results = run_day_optimization(
+    dayOptResults = run_day_optimization(
         topology_df=topology_df,
         demand_df=demand_df,
         price_df_root_node=price_df,
         total_battery_capacity=20.0,
     )
 
-    for key, value in day_opt_results.variables.items():
+    for key, value in dayOptResults.variables.items():
         print(f" {key}: {value.round(1)}")
 
+    # save dayOptResults to csv
+    variables_df = pd.DataFrame(dayOptResults.variables.items())
+    variables_df.to_csv("day_optimization_results.csv", index=False)
     pass
 
 

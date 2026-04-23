@@ -10,7 +10,6 @@ import pandas as pd
 
 from .optimization import formulate_vpp_problem
 
-
 @dataclass(frozen=True)
 class DayOptimizationResult:
     """Structured outputs for a solved day-level optimization."""
@@ -20,6 +19,7 @@ class DayOptimizationResult:
     variables: Dict[str, np.ndarray]
     duals: Dict[str, list[np.ndarray]]
     diagnostics: Dict[str, Any]
+    
 
 
 # TODO: Define unit of battery capacity
