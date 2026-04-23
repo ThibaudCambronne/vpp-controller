@@ -1,20 +1,89 @@
-import cvxpy as cp
-import numpy as np
-import cvxpy as cp
 import numpy as np
 import pandas as pd
 
-from vpp_controller.optimization import VPPFormulation, formulate_vpp_problem
-from vpp_controller.runner import run_day_optimization, DayOptimizationResult, solve_formulation_problem
-from vpp_controller.demand_data import (
-    SEASON_DATES,
-    build_season_base_demand,
-    create_all_nodes_demand,
-    create_node_demand,
-    load_demand_data,
+from vpp_controller.optimization import formulate_vpp_problem
+from vpp_controller.paths import DATA_DIR
+from vpp_controller.runner import (
+    build_model_inputs,
+    solve_formulation_problem,
 )
 
+
 def test_hw3():
-    topology_df = pd.read_csv(f"data/homework3bus.csv")
-    print(topology_df)
-    prices = c = [100.0, 0.0, 0.0, 150.0, 0.0, 0.0, 0.0, 0.0, 0.0, 50.0, 0.0, 0.0, 0.0]
+    """Test the optimization to see if we get the same as hw 3 when we run 1 timestep with no battery."""
+
+    topology_df = pd.read_csv(DATA_DIR / "homework3bus.csv")
+    print(topology_df.columns)
+
+    # price series is just the price profile for node 0
+    price_series = np.array([topology_df["c"].iloc[0]])
+    demand_df = pd.DataFrame(
+        {
+            "node": topology_df["node"].to_numpy(dtype=int),
+            "hour": np.zeros(len(topology_df), dtype=int),
+            "l_P": topology_df["l_P"].to_numpy(dtype=float),
+            "l_Q": topology_df["l_Q"].to_numpy(dtype=float),
+        }
+    )
+
+    model_inputs = build_model_inputs(
+        topology_df=topology_df,
+        demand_df=demand_df,
+        price_series_root_node=price_series,
+        total_battery_capacity=0,
+    )
+
+    # add generation cost at all nodes (right now it only has price for node 0)
+    model_inputs["c"][:, 0] = topology_df["c"]
+
+    formulation = formulate_vpp_problem(**model_inputs)
+    solve_formulation_problem(formulation.problem)
+
+    variables = {
+        name: np.array(var.value) if hasattr(var, "value") else np.array(var)
+        for name, var in formulation.variables.items()
+    }
+
+    # Check results against expected values from hw 3
+    assert np.isclose(formulation.problem.value, 299.79)
+
+    assert np.isclose(
+        variables["p_{i,t}"][:, 0],
+        np.array([1.573, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.934, 0.0, 0.0, 0.0]),
+        atol=0.001,
+    ).all()
+
+    assert np.isclose(
+        variables["q_{i,t}"][:, 0],
+        np.array([0.988, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.208, 0.0, 0.0, 0.0]),
+        atol=0.001,
+    ).all()
+
+    assert np.isclose(
+        variables["s_{i,t}"][:, 0],
+        np.array([1.858, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 2.281, 0.0, 0.0, 0.0]),
+        atol=0.001,
+    ).all()
+
+    assert np.isclose(
+        variables["V_{i,t}"][:, 0],
+        np.array(
+            [
+                1.000,
+                0.967,
+                0.963,
+                0.963,
+                0.962,
+                0.960,
+                0.957,
+                0.957,
+                0.957,
+                0.964,
+                0.955,
+                0.954,
+                0.953,
+            ]
+        )
+        ** 2,
+        atol=0.001,
+    ).all()
