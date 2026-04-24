@@ -47,10 +47,6 @@ def main() -> None:
         for key, value in dayOptResults.variables.items():
             print(f" {key}: {value.round(1)}")
 
-        dayOptResults.variables["P_{ij,t}"][1, 0, :].round(2)
-
-        dayOptResults.variables["P_{ij,t}"][:, :, 0].round(2)
-
         metadata_path, variables_path = save_day_optimization_result(
             dayOptResults, batt_cap, opVersion
         )

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-from dataclasses import asdict
 from pathlib import Path
 
 import numpy as np
@@ -22,7 +21,9 @@ def _to_jsonable(value):
     return value
 
 
-def save_day_optimization_result(day_opt_results, battCap, opVersion, output_dir: Path = Path("outputs")):
+def save_day_optimization_result(
+    day_opt_results, battCap, opVersion, output_dir: Path = Path("outputs")
+):
     """
     Save optimization outputs in a reusable format.
 
@@ -32,7 +33,9 @@ def save_day_optimization_result(day_opt_results, battCap, opVersion, output_dir
     output_dir.mkdir(parents=True, exist_ok=True)
     run_tag = pd.Timestamp.now().strftime("%Y%m%d_%H%M%S")
 
-    variables_path = output_dir / f"day_opt_variables_battCap{battCap}_v_{opVersion}.npz"
+    variables_path = (
+        output_dir / f"day_opt_variables_battCap{battCap}_v_{opVersion}.npz"
+    )
     np.savez_compressed(variables_path, **day_opt_results.variables)
 
     metadata = {
