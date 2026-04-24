@@ -1,5 +1,3 @@
-from .optimization import VPPFormulation, formulate_vpp_problem
-from .runner import DayOptimizationResult, run_day_optimization
 from .demand_data import (
     SEASON_DATES,
     build_season_base_demand,
@@ -7,6 +5,8 @@ from .demand_data import (
     create_node_demand,
     load_demand_data,
 )
+from .optimization import VPPFormulation, formulate_vpp_problem
+from .runner import DayOptimizationResult, run_day_optimization
 
 __all__ = [
     "VPPFormulation",
