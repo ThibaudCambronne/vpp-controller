@@ -37,6 +37,9 @@ def test_1():
     battery_duration = 2.0  # hours
     max_energy_capacity = 0.7 * battery_duration
 
+    eta_ch = 0.95
+    eta_dis = 0.95
+
     formulation = formulate_vpp_problem(
         N=n_set,
         E=e_set,
@@ -51,7 +54,8 @@ def test_1():
         I_max=I_max,
         v_min=0.95,
         v_max=1.05,
-        eta_batt=0.95,
+        eta_ch=eta_ch,
+        eta_dis=eta_dis,
         alpha=battery_duration,
         delta_t=1.0,
         e_0=0.0,
@@ -61,7 +65,12 @@ def test_1():
         v_0=1.0,
     )
 
-    result = run_test_case_and_solve(formulation)
+    result = run_test_case_and_solve(
+        formulation,
+        eta_ch=eta_ch,
+        eta_dis=eta_dis,
+        delta_t=1.0,
+    )
 
     # Check that battery is placed at node 2
     P_batt_j_max = result.variables["P^{batt}_{j,max}"]
@@ -69,10 +78,15 @@ def test_1():
         "Battery of around 0.5 MW should be placed at node 2."
     )
 
-    # Check that node battery charges around 0.5 MW at t=1 and discharges at t=2
+    # Check that node battery charges around 0.5 MW at t=0 and discharges at t=1.
+    P_ch = result.variables["P^{ch}_{j,t}"]
+    P_dis = result.variables["P^{dis}_{j,t}"]
     P_batt = result.variables["P^{batt}_{j,t}"]
-    assert P_batt[2, 0] < -0.45, "Battery should charge around 0.5 MW at t=0."
-    assert P_batt[2, 1] > 0.45, "Battery should discharge around 0.5 MW at t=1."
+    assert P_ch[2, 0] > 0.45, "Battery should charge around 0.5 MW at t=0."
+    assert P_dis[2, 1] > 0.42, "Battery should discharge around 0.5 MW at t=1."
+    assert np.allclose(P_batt, P_dis - P_ch, atol=1e-6), (
+        "Net battery injection must satisfy P_batt = P_dis - P_ch."
+    )
 
     # Check that there is only generation at node 0 that is above 1.5 MW at t=0
     # to supply 1MW of demand of node 0, 0.5 MW of battery charge for node 2, around 0.2 MW of battery charge for node 1 because
@@ -89,7 +103,13 @@ def test_1():
     )
 
 
-def run_test_case_and_solve(formulation: VPPFormulation) -> DayOptimizationResult:
+def run_test_case_and_solve(
+    formulation: VPPFormulation,
+    *,
+    eta_ch: float,
+    eta_dis: float,
+    delta_t: float,
+) -> DayOptimizationResult:
     solve_formulation_problem(formulation.problem)
 
     result = DayOptimizationResult(
@@ -126,6 +146,8 @@ def run_test_case_and_solve(formulation: VPPFormulation) -> DayOptimizationResul
         "V_{i,t}",
         "delta^P_{i,t}",
         "delta^Q_{i,t}",
+        "P^{ch}_{j,t}",
+        "P^{dis}_{j,t}",
         "P^{batt}_{j,t}",
         "Q^{batt}_{j,t}",
         "S^{batt}_{j,t}",
@@ -146,6 +168,18 @@ def run_test_case_and_solve(formulation: VPPFormulation) -> DayOptimizationResul
 
     cycle_gap = np.max(np.abs(e[:, 0] - e[:, -1]))
     assert cycle_gap <= 1e-5, "Battery cycle constraint failed in 3-node test case."
+
+    P_ch = result.variables["P^{ch}_{j,t}"]
+    P_dis = result.variables["P^{dis}_{j,t}"]
+    assert np.min(P_ch) >= -1e-7, "Charging power must be nonnegative."
+    assert np.min(P_dis) >= -1e-7, "Discharging power must be nonnegative."
+
+    soc_residual = (
+        e[:, 1:] - e[:, :-1] - (eta_ch * P_ch - (1.0 / eta_dis) * P_dis) * delta_t
+    )
+    assert np.max(np.abs(soc_residual)) <= 1e-5, (
+        "Battery energy dynamics equation residual is too large."
+    )
 
     v = result.variables["V_{i,t}"]
     assert np.min(v) >= 0.95**2 - 1e-5, (

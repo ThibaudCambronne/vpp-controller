@@ -31,7 +31,8 @@ def formulate_vpp_problem(
     I_max: np.ndarray,
     v_min: float,
     v_max: float,
-    eta_batt: float,
+    eta_ch: float,
+    eta_dis: float,
     alpha: float,
     delta_t: float,
     e_0: float,
@@ -46,7 +47,7 @@ def formulate_vpp_problem(
     Variable keys in the returned dictionary intentionally match paper notation:
     - p_{i,t}, q_{i,t}, s_{i,t}, P_{ij,t}, Q_{ij,t}, L_{ij,t}, V_{i,t}
     - delta^P_{i,t}, delta^Q_{i,t}
-    - P^{batt}_{j,t}, Q^{batt}_{j,t}, S^{batt}_{j,t}, e_{j,t}
+    - P^{ch}_{j,t}, P^{dis}_{j,t}, P^{batt}_{j,t}, Q^{batt}_{j,t}, S^{batt}_{j,t}, e_{j,t}
     - P^{batt}_{j,max}, e^{batt}_{j,max}
     """
 
@@ -70,6 +71,8 @@ def formulate_vpp_problem(
         r=r,
         x=x,
         I_max=I_max,
+        eta_ch=eta_ch,
+        eta_dis=eta_dis,
         v_0=v_0,
     )
 
@@ -111,7 +114,9 @@ def formulate_vpp_problem(
     delta_Q_pos = cp.Variable((n_nodes, n_time), nonneg=True, name="delta^Q_{i,t,+}")
     delta_Q_neg = cp.Variable((n_nodes, n_time), nonneg=True, name="delta^Q_{i,t,-}")
 
-    P_batt = cp.Variable((n_nodes, n_time), name="P^{batt}_{j,t}")
+    P_ch = cp.Variable((n_nodes, n_time), nonneg=True, name="P^{ch}_{j,t}")
+    P_dis = cp.Variable((n_nodes, n_time), nonneg=True, name="P^{dis}_{j,t}")
+    P_batt = P_dis - P_ch
     Q_batt = cp.Variable((n_nodes, n_time), name="Q^{batt}_{j,t}")
     S_batt = cp.Variable((n_nodes, n_time), nonneg=True, name="S^{batt}_{j,t}")
     e = cp.Variable((n_nodes, n_time + 1), name="e_{j,t}")
@@ -129,6 +134,8 @@ def formulate_vpp_problem(
     constraints["generation_apparent_power_cap"] = []
     constraints["battery_inverter_apparent_power"] = []
     constraints["battery_inverter_capacity"] = []
+    constraints["battery_charge_power_capacity"] = []
+    constraints["battery_discharge_power_capacity"] = []
     constraints["battery_energy_limits"] = []
     constraints["battery_cycle"] = []
     constraints["battery_energy_dynamics"] = []
@@ -166,6 +173,15 @@ def formulate_vpp_problem(
                 S_batt[j_idx, t_idx] <= P_batt_max[j_idx]
             )
 
+            # Directional power limits prevent simultaneous charge/discharge
+            # from bypassing inverter capacity through net cancellation.
+            constraints["battery_charge_power_capacity"].append(
+                P_ch[j_idx, t_idx] <= P_batt_max[j_idx]
+            )
+            constraints["battery_discharge_power_capacity"].append(
+                P_dis[j_idx, t_idx] <= P_batt_max[j_idx]
+            )
+
             # Battery energy limits (11)
             constraints["battery_energy_limits"].append(e[j_idx, t_idx] >= 0.0)
             constraints["battery_energy_limits"].append(
@@ -186,7 +202,9 @@ def formulate_vpp_problem(
         for t_idx in range(n_time):
             constraints["battery_energy_dynamics"].append(
                 e[j_idx, t_idx + 1]
-                == e[j_idx, t_idx] - eta_batt * P_batt[j_idx, t_idx] * delta_t
+                == e[j_idx, t_idx]
+                + (eta_ch * P_ch[j_idx, t_idx] - (1.0 / eta_dis) * P_dis[j_idx, t_idx])
+                * delta_t
             )
 
     constraints["active_power_balance"] = [P[0, 0, :] == 0.0]
@@ -269,7 +287,7 @@ def formulate_vpp_problem(
     # No battery at root node
     constraints["no_battery_at_root"] = [e_batt_max_by_node[root_node_idx] == 0.0]
 
-    generation_cost = cp.sum(cp.multiply(c, p))
+    generation_cost = cp.sum(cp.multiply(c, s))
     imbalance_cost = mu_P * cp.sum(delta_P_pos + delta_P_neg) + mu_Q * cp.sum(
         delta_Q_pos + delta_Q_neg
     )
@@ -292,6 +310,8 @@ def formulate_vpp_problem(
         "delta^P_{i,t,-}": delta_P_neg,
         "delta^Q_{i,t,+}": delta_Q_pos,
         "delta^Q_{i,t,-}": delta_Q_neg,
+        "P^{ch}_{j,t}": P_ch,
+        "P^{dis}_{j,t}": P_dis,
         "P^{batt}_{j,t}": P_batt,
         "Q^{batt}_{j,t}": Q_batt,
         "S^{batt}_{j,t}": S_batt,
@@ -327,6 +347,8 @@ def _validate_inputs(
     r: np.ndarray,
     x: np.ndarray,
     I_max: np.ndarray,
+    eta_ch: float,
+    eta_dis: float,
     v_0: float,
 ) -> None:
     if n_nodes == 0:
@@ -351,6 +373,10 @@ def _validate_inputs(
         raise ValueError("I_max must have shape (|E|,).")
     if len(rho) != n_nodes:
         raise ValueError("rho must contain one entry per node.")
+    if eta_ch <= 0.0 or eta_dis <= 0.0:
+        raise ValueError("eta_ch and eta_dis must be strictly positive.")
+    if eta_ch > 1.0 or eta_dis > 1.0:
+        raise ValueError("eta_ch and eta_dis must be less than or equal to 1.0.")
     if v_0 != 1.0:
         raise ValueError(
             "v_0 should most likely be 1.0 p.u.."
