@@ -235,7 +235,7 @@ def plot_transmission_congestion(results_dict, OUT_PATH, filter_small_nodes=Fals
     ax.set_ylabel('Time (h)')
     zlabel = 'Thermal Capacity Shadow Price (#)'
     ax.set_zlabel(zlabel)
-    title_parts = ['Battery Dispatch by Node and Hour']
+    title_parts = ['Thermal Capacity Shadow Price by Node and Hour']
     if filter_small_nodes:
         title_parts.append('Nodes <0.1% Filtered')
     ax.set_title(' | '.join(title_parts))
@@ -251,6 +251,84 @@ def plot_transmission_congestion(results_dict, OUT_PATH, filter_small_nodes=Fals
 
     suffix = ('_filtered' if filter_small_nodes else '')
     plt.savefig(OUT_PATH / f'battery_thermal_duals_cap{total_cap:.0f}MWh{suffix}.png', dpi=150, bbox_inches='tight', pad_inches=0.5)
+    # plt.show()
+    plt.close()
+    return
+
+
+def plot_generic_value(results_dict, OUT_PATH,variable_key,dict_key='variables', filter_small_nodes=False):
+    """3D bar chart of line congestion by node (x) and hour (y), value on z-axis.
+    Assumes results[dict_key][variable_key] is a list of n_nodes lists,
+    each of length n_hours, indexed as [node][hour].
+
+    Args:
+        results_dict: single results dict for the scenario to visualise.
+        normalize: if True, each bar shows dispatch as % of that node's capacity.
+        filter_small_nodes: if True, omit nodes whose capacity is <0.1% of total.
+    """
+    node_caps = np.array(results_dict['variables']['e^{batt}_{j,max}'])
+    total_cap = float(node_caps.sum())
+    vals = results_dict[dict_key][variable_key]
+    val_array = np.array(vals, dtype=float)  # shape: (n_nodes, n_hours)
+    n_nodes, n_hours = val_array.shape
+
+    # Determine which nodes to keep
+    if filter_small_nodes:
+        kept_nodes = [j for j in range(n_nodes) if max(val_array[j]) >= 1e-3]
+    else:
+        kept_nodes = list(range(n_nodes))
+
+    val_array = val_array[kept_nodes, :]
+
+    max_val = np.abs(val_array).max()
+    if max_val > 0:
+        val_array[np.abs(val_array) < 0.001] = 0.0
+
+    n_kept = len(kept_nodes)
+    x_positions = np.arange(n_kept, dtype=float)
+    node_idx, hour_idx = np.meshgrid(x_positions, np.arange(n_hours), indexing='ij')
+    node_flat = node_idx.ravel()
+    hour_flat = hour_idx.ravel()
+    values_flat = val_array.ravel()
+
+    dx = 0.6
+    dy = 0.6
+    dz = np.abs(values_flat)
+    z_bottoms = np.where(values_flat >= 0, 0.0, values_flat)
+    colors = ['steelblue' if v >= 0 else 'tomato' for v in values_flat]
+
+    fig = plt.figure(figsize=(14, 8))
+    ax = fig.add_subplot(111, projection='3d')
+    ax.bar3d(
+        node_flat - dx / 2,
+        hour_flat - dy / 2,
+        z_bottoms,
+        dx, dy, dz,
+        color=colors,
+        alpha=0.85,
+        zsort='average',
+    )
+
+    ax.set_xlabel('Node (#)')
+    ax.set_ylabel('Time (h)')
+    zlabel = variable_key
+    ax.set_zlabel(zlabel)
+    title_parts = [variable_key + ' by Node and Hour']
+    if filter_small_nodes:
+        title_parts.append('Nodes <0.1% Filtered')
+    ax.set_title(' | '.join(title_parts))
+    ax.set_xticks(x_positions)
+    ax.set_xticklabels([str(j) for j in kept_nodes])
+    ax.set_yticks(range(0, n_hours, max(1, n_hours // 12)))
+
+    # legend_elements = [
+    #     Patch(facecolor='steelblue', label='Discharging (+)'),
+    #     Patch(facecolor='tomato', label='Charging (−)'),
+    # ]
+    # ax.legend(handles=legend_elements, loc='upper left')
+
+    suffix = ('_filtered' if filter_small_nodes else '')
+    plt.savefig(OUT_PATH / f'{variable_key}_{total_cap:.0f}MWh{suffix}.png', dpi=150, bbox_inches='tight', pad_inches=0.5)
     # plt.show()
     plt.close()
     return
@@ -302,14 +380,14 @@ def main(date_string):
     results_list = []
     for file in json_files:
         results_dict = get_results_dict(file)
-        plot_battery_dispatch_3d(results_dict,OUT_PATH,normalize=False,filter_small_nodes=False)
+        # plot_battery_dispatch_3d(results_dict,OUT_PATH,normalize=False,filter_small_nodes=False)
         plot_transmission_congestion(results_dict,OUT_PATH,filter_small_nodes=True)
-        results_list.append(results_dict)
-    interestNode = 9
-    plot_node_dispatch_by_capacity(results_list, interestNode, OUT_PATH)
+    #     results_list.append(results_dict)
+    # interestNode = 9
+    # plot_node_dispatch_by_capacity(results_list, interestNode, OUT_PATH)
     
-    plot_objective_vs_capacity(results_list,OUT_PATH)
-    plot_capacity_allocation(results_list,OUT_PATH)
+    # plot_objective_vs_capacity(results_list,OUT_PATH)
+    # plot_capacity_allocation(results_list,OUT_PATH)
     return
 
 def find_files_by_date(date_str):
