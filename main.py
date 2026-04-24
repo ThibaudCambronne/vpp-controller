@@ -1,4 +1,5 @@
 import pandas as pd
+import numpy as np
 
 # import sys
 # from pathlib import Path
@@ -12,7 +13,7 @@ from src.vpp_controller.runner import run_day_optimization
 from src.results_format import save_day_optimization_result
 
 
-
+opVersion=1
 
 
 def main() -> None:
@@ -29,24 +30,30 @@ def main() -> None:
     demand_df = demand_df[["node", "hour", "l_P", "l_Q"]]
     
     print(demand_df)
+    
+    # create list from 0 to 20 iterating by 5
+    batt_caps = list(np.arange(0, 21, 1))
+    
+    for batt_cap in batt_caps:
+        print(f"Running optimization with battery capacity: {batt_cap} kWh")
+    
+        dayOptResults = run_day_optimization(
+            topology_df=topology_df,
+            demand_df=demand_df,
+            price_df_root_node=price_df,
+            total_battery_capacity=batt_cap,
+        )
 
-    dayOptResults = run_day_optimization(
-        topology_df=topology_df,
-        demand_df=demand_df,
-        price_df_root_node=price_df,
-        total_battery_capacity=20.0,
-    )
+        for key, value in dayOptResults.variables.items():
+            print(f" {key}: {value.round(1)}")
 
-    for key, value in dayOptResults.variables.items():
-        print(f" {key}: {value.round(1)}")
+        dayOptResults.variables["P_{ij,t}"][1,0, :].round(2)
 
-    dayOptResults.variables["P_{ij,t}"][1,0, :].round(2)
+        dayOptResults.variables["P_{ij,t}"][:,:, 0].round(2)
 
-    dayOptResults.variables["P_{ij,t}"][:,:, 0].round(2)
-
-    metadata_path, variables_path = save_day_optimization_result(dayOptResults)
-    print(f"Saved metadata to: {metadata_path}")
-    print(f"Saved variables to: {variables_path}")
+        metadata_path, variables_path = save_day_optimization_result(dayOptResults, batt_cap, opVersion)
+        print(f"Saved metadata to: {metadata_path}")
+        print(f"Saved variables to: {variables_path}")
 
 
 if __name__ == "__main__":

@@ -22,7 +22,7 @@ def _to_jsonable(value):
     return value
 
 
-def save_day_optimization_result(day_opt_results, output_dir: Path = Path("outputs")):
+def save_day_optimization_result(day_opt_results, battCap, opVersion, output_dir: Path = Path("outputs")):
     """
     Save optimization outputs in a reusable format.
 
@@ -32,7 +32,7 @@ def save_day_optimization_result(day_opt_results, output_dir: Path = Path("outpu
     output_dir.mkdir(parents=True, exist_ok=True)
     run_tag = pd.Timestamp.now().strftime("%Y%m%d_%H%M%S")
 
-    variables_path = output_dir / f"day_opt_variables_{run_tag}.npz"
+    variables_path = output_dir / f"day_opt_variables_battCap{battCap}_v_{opVersion}.npz"
     np.savez_compressed(variables_path, **day_opt_results.variables)
 
     metadata = {
@@ -50,7 +50,7 @@ def save_day_optimization_result(day_opt_results, output_dir: Path = Path("outpu
         },
     }
 
-    metadata_path = output_dir / f"day_opt_metadata_{run_tag}.json"
+    metadata_path = output_dir / f"day_opt_metadata_battCap{battCap}_v_{opVersion}.json"
     metadata_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
     return metadata_path, variables_path
 
