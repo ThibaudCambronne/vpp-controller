@@ -1,8 +1,6 @@
 import numpy as np
 import pandas as pd
 
-from src.results_format import save_day_optimization_result
-
 # import sys
 # from pathlib import Path
 # ROOT = Path(__file__).resolve().parent
@@ -11,6 +9,7 @@ from src.results_format import save_day_optimization_result
 #     sys.path.insert(0, str(SRC))
 from src.vpp_controller.demand_data import create_all_nodes_demand
 from src.vpp_controller.paths import DATA_NETWORKS_DIR, DATA_PRICES_DIR
+from src.vpp_controller.results_format import save_day_optimization_result
 from src.vpp_controller.runner import run_day_optimization
 
 opVersion = 1

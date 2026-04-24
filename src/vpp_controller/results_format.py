@@ -6,8 +6,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from vpp_controller.paths import OUTPUT_DIR
-from vpp_controller.runner import DayOptimizationResult
+from .paths import OUTPUT_DIR
+from .runner import DayOptimizationResult
 
 
 def _to_jsonable(value):
