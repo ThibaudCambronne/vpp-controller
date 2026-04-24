@@ -159,7 +159,7 @@ def formulate_vpp_problem(
 
             # TODO: test
             # Battery inverter apparent power definition, relaxed (13)
-            constraints["battery_no_reactive_power"].append(Q_batt[j_idx, t_idx] == 0.0)
+            # constraints["battery_no_reactive_power"].append(Q_batt[j_idx, t_idx] == 0.0)
 
             # Battery inverter capacity (14)
             constraints["battery_inverter_capacity"].append(
@@ -269,7 +269,7 @@ def formulate_vpp_problem(
     # No battery at root node
     constraints["no_battery_at_root"] = [e_batt_max_by_node[root_node_idx] == 0.0]
 
-    generation_cost = cp.sum(cp.multiply(c, s))
+    generation_cost = cp.sum(cp.multiply(c, p))
     imbalance_cost = mu_P * cp.sum(delta_P_pos + delta_P_neg) + mu_Q * cp.sum(
         delta_Q_pos + delta_Q_neg
     )
