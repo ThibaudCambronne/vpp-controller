@@ -49,6 +49,7 @@ def plot_objective_vs_capacity(results_list,OUT_PATH):
     plt.tight_layout()
     plt.savefig(OUT_PATH / 'objective_vs_capacity.png', dpi=150, bbox_inches='tight')
     # plt.show()
+    plt.close()
     return
 
 
@@ -85,6 +86,7 @@ def plot_capacity_allocation(results_list,OUT_PATH):
     plt.tight_layout()
     plt.savefig(OUT_PATH / 'capacity_allocation_by_node.png', dpi=150, bbox_inches='tight')
     # plt.show()
+    plt.close()
     return
 
 
@@ -142,6 +144,7 @@ def plot_battery_dispatch_3d(results_dict,OUT_PATH):
     total_cap = sum(results_dict['variables']['e^{batt}_{j,max}'])
     plt.savefig(OUT_PATH / f'battery_dispatch_3d_cap{total_cap:.0f}MWh.png', dpi=150, bbox_inches='tight')
     # plt.show()
+    plt.close()
     return
 
 
@@ -150,11 +153,11 @@ def main(date_string):
     create_output_folder(OUT_PATH)
     json_files = find_files_by_date(date_string)
     results_list = []
-
     for file in json_files:
         results_dict = get_results_dict(file)
         plot_battery_dispatch_3d(results_dict,OUT_PATH)
         results_list.append(results_dict)
+    
     plot_objective_vs_capacity(results_list,OUT_PATH)
     plot_capacity_allocation(results_list,OUT_PATH)
     return
@@ -174,5 +177,5 @@ def find_files_by_date(date_str):
 
 
 if __name__ == '__main__':
-    date_string = "20260422_175358"
+    date_string = "battCap"
     main(date_string)
