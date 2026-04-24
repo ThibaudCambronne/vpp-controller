@@ -209,3 +209,5 @@ __marimo__/
 
 # Custom
 outputs/
+src/**/*.csv
+tests/**/*.csv
