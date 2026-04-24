@@ -25,4 +25,4 @@ def test_day():
 
     # save dayOptResults to csv
     variables_df = pd.DataFrame(dayOptResults.variables)
-    variables_df.to_csv("day_optimization_results.csv", index=False)
+    # variables_df.to_csv("day_optimization_results.csv", index=False)

@@ -6,6 +6,9 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from vpp_controller.paths import OUTPUT_DIR
+from vpp_controller.runner import DayOptimizationResult
+
 
 def _to_jsonable(value):
     if isinstance(value, dict):
@@ -22,7 +25,10 @@ def _to_jsonable(value):
 
 
 def save_day_optimization_result(
-    day_opt_results, battCap, opVersion, output_dir: Path = Path("outputs")
+    day_opt_results: DayOptimizationResult,
+    battCap: float,
+    opVersion: int,
+    output_dir: Path = OUTPUT_DIR,
 ):
     """
     Save optimization outputs in a reusable format.
@@ -55,6 +61,10 @@ def save_day_optimization_result(
 
     metadata_path = output_dir / f"day_opt_metadata_battCap{battCap}_v_{opVersion}.json"
     metadata_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+
+    print(f"Saved metadata to: {metadata_path}")
+    print(f"Saved variables to: {variables_path}")
+
     return metadata_path, variables_path
 
 
