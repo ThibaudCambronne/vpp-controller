@@ -420,11 +420,134 @@ def plot_node_dispatch_by_capacity(results_list, node, OUT_PATH, normalize=False
     return
 
 
+def plot_node_slack_by_capacity(results_list, node, OUT_PATH, normalize=False):
+    """Line chart of slack capacity over time for a single node/element, one line per capacity scenario.
+
+    Args:
+        results_list: list of results dicts, one per JSON file for a given date.
+        node: integer index into delta^P_{i,t} (assumed to match node/element ordering).
+        OUT_PATH: folder in which to save the figure.
+        normalize: if True, slack is shown as % of that node's battery capacity.
+    """
+    sorted_results = sorted(results_list, key=lambda r: sum(r['variables']['e^{batt}_{j,max}']))
+
+    fig, ax = plt.subplots(figsize=(10, 5))
+    for r in sorted_results:
+        total_cap = sum(r['variables']['e^{batt}_{j,max}'])
+        slack = np.array(r['variables']['delta^P_{i,t}'][node], dtype=float)
+        if normalize:
+            node_cap = r['variables']['e^{batt}_{j,max}'][node]
+            if node_cap > 0:
+                slack = slack / node_cap * 100.0
+        ax.plot(range(len(slack)), slack, marker='o', markersize=3,
+                linewidth=1.5, label=f'Cap = {total_cap:.1f}')
+
+    ax.axhline(0, color='black', linewidth=0.8, linestyle='--')
+    ax.set_xlabel('Hour')
+    ax.set_ylabel('% of Node Capacity' if normalize else 'Slack Capacity (MW)')
+    title = f'Slack Capacity at Node {node} Across Capacity Scenarios'
+    if normalize:
+        title += ' | Normalized by Node Capacity'
+    ax.set_title(title)
+    ax.legend(title='Total Capacity (MWh)', bbox_to_anchor=(1.05, 1), loc='upper left')
+    ax.grid(True, linestyle='--', alpha=0.5)
+    plt.tight_layout()
+    norm_suffix = '_norm' if normalize else ''
+    plt.savefig(OUT_PATH / f'node_{node}_slack_by_capacity{norm_suffix}.png', dpi=150, bbox_inches='tight')
+    # plt.show()
+    plt.close()
+    return
+
+
+def plot_slack_3d(results_dict, OUT_PATH, normalize=False, filter_small_nodes=False):
+    """3D bar chart of slack capacity by node/element (x) and hour (y), value on z-axis.
+
+    Args:
+        results_dict: single results dict for the scenario to visualise.
+        normalize: if True, each bar shows slack as % of that node's battery capacity.
+        filter_small_nodes: if True, omit nodes whose battery capacity is <0.1% of total.
+    """
+    node_caps = np.array(results_dict['variables']['e^{batt}_{j,max}'])
+    total_cap = float(node_caps.sum())
+
+    slack = np.array(results_dict['variables']['delta^P_{i,t}'], dtype=float)  # (n_elements, n_hours)
+    n_elements, n_hours = slack.shape
+
+    if filter_small_nodes:
+        kept_nodes = [j for j in range(n_elements) if node_caps[j] / total_cap >= 0.001]
+    else:
+        kept_nodes = list(range(n_elements))
+
+    slack = slack[kept_nodes, :]
+    node_caps_kept = node_caps[kept_nodes]
+
+    if normalize:
+        for i, cap in enumerate(node_caps_kept):
+            if cap > 0:
+                slack[i, :] = slack[i, :] / cap * 100.0
+
+    max_val = np.abs(slack).max()
+    if max_val > 0:
+        slack[np.abs(slack) < 0.001 * max_val] = 0.0
+
+    n_kept = len(kept_nodes)
+    x_positions = np.arange(n_kept, dtype=float)
+    node_idx, hour_idx = np.meshgrid(x_positions, np.arange(n_hours), indexing='ij')
+    node_flat = node_idx.ravel()
+    hour_flat = hour_idx.ravel()
+    values_flat = slack.ravel()
+
+    dx = 0.6
+    dy = 0.6
+    dz = np.abs(values_flat)
+    z_bottoms = np.where(values_flat >= 0, 0.0, values_flat)
+    colors = ['steelblue' if v >= 0 else 'tomato' for v in values_flat]
+
+    fig = plt.figure(figsize=(14, 8))
+    ax = fig.add_subplot(111, projection='3d')
+    ax.bar3d(
+        node_flat - dx / 2,
+        hour_flat - dy / 2,
+        z_bottoms,
+        dx, dy, dz,
+        color=colors,
+        alpha=0.85,
+        zsort='average',
+    )
+
+    ax.set_xlabel('Node')
+    ax.set_ylabel('Hour')
+    zlabel = '% of Node Capacity' if normalize else 'Slack Capacity (MW)'
+    ax.set_zlabel(zlabel)
+    title_parts = ['Slack Capacity by Node and Hour']
+    if normalize:
+        title_parts.append('Normalized by Node Capacity')
+    if filter_small_nodes:
+        title_parts.append('Nodes <0.1% Filtered')
+    ax.set_title(' | '.join(title_parts))
+    ax.set_xticks(x_positions)
+    ax.set_xticklabels([str(j) for j in kept_nodes])
+    ax.set_yticks(range(0, n_hours, max(1, n_hours // 12)))
+
+    legend_elements = [
+        Patch(facecolor='steelblue', label='Positive (+)'),
+        Patch(facecolor='tomato', label='Negative (−)'),
+    ]
+    ax.legend(handles=legend_elements, loc='upper left')
+
+    suffix = ('_norm' if normalize else '') + ('_filtered' if filter_small_nodes else '')
+    plt.savefig(OUT_PATH / f'slack_3d_cap{total_cap:.0f}MWh{suffix}.png', dpi=150, bbox_inches='tight', pad_inches=0.5)
+    # plt.show()
+    plt.close()
+    return
+
+
 def main(date_string):
     OUT_PATH = FIGURE_PATH / date_string
     create_output_folder(OUT_PATH)
     json_files = find_files_by_date(date_string)
     results_list = []
+    
     for file in json_files:
         results_dict = get_results_dict(file)
         # plot_battery_dispatch_3d(results_dict,OUT_PATH,normalize=False,filter_small_nodes=False)
