@@ -42,11 +42,25 @@ def plot_objective_vs_capacity(results_list, OUT_PATH):
     capacities_sorted, objectives_sorted = zip(*pairs)
 
     fig, ax = plt.subplots(figsize=(8, 5))
-    ax.plot(capacities_sorted, objectives_sorted, marker="o", linewidth=1.5)
-    ax.set_xlabel("Total Battery Capacity Constraint (MWh)")
-    ax.set_ylabel("Objective Value")
-    ax.set_title("Objective Value vs Battery Capacity Constraint")
-    ax.grid(True, linestyle="--", alpha=0.5)
+    ax.plot(capacities_sorted, objectives_sorted, marker='o', linewidth=1.5, color='steelblue', label='Objective')
+    ax.set_xlabel('Total Battery Capacity Constraint (MWh)')
+    ax.set_ylabel('Objective Value', color='steelblue')
+    ax.tick_params(axis='y', labelcolor='steelblue')
+
+    caps = list(capacities_sorted)
+    objs = list(objectives_sorted)
+    if len(caps) > 1:
+        ax2 = ax.twinx()
+        mid_caps = [(caps[k] + caps[k + 1]) / 2 for k in range(len(caps) - 1)]
+        bar_widths = [(caps[k + 1] - caps[k]) * 0.5 for k in range(len(caps) - 1)]
+        marginals = [(objs[k + 1] - objs[k]) / (caps[k + 1] - caps[k]) for k in range(len(caps) - 1)]
+        ax2.bar(mid_caps, marginals, width=bar_widths, color='darkorange', alpha=0.45, label='Marginal Benefit')
+        ax2.set_ylabel('Marginal Benefit (ΔObjective / ΔCapacity)', color='darkorange')
+        ax2.tick_params(axis='y', labelcolor='darkorange')
+        ax2.axhline(0, color='darkorange', linewidth=0.6, linestyle='--')
+
+    ax.set_title('Objective Value vs Battery Capacity Constraint')
+    ax.grid(True, linestyle='--', alpha=0.5)
     plt.tight_layout()
     plt.savefig(OUT_PATH / "objective_vs_capacity.png", dpi=150, bbox_inches="tight")
     # plt.show()
@@ -54,7 +68,49 @@ def plot_objective_vs_capacity(results_list, OUT_PATH):
     return
 
 
-def plot_capacity_allocation(results_list, OUT_PATH):
+def plot_node_profit_by_capacity(results_list, OUT_PATH):
+    """Grouped bar chart: per-node profit for each capacity scenario.
+
+    Profit at each node = dot product of P^{batt}_{j,t}[node] with p_{i,t}[0]
+    (price time series). Positive values indicate net revenue; negative indicate net cost.
+
+    Args:
+        results_list: list of results dicts, one per JSON file for a given date.
+    """
+    sorted_results = sorted(results_list, key=lambda r: sum(r['variables']['e^{batt}_{j,max}']))
+    total_caps = [sum(r['variables']['e^{batt}_{j,max}']) for r in sorted_results]
+    n_scenarios = len(sorted_results)
+    n_nodes = len(sorted_results[0]['variables']['e^{batt}_{j,max}'])
+    nodes = np.arange(n_nodes)
+
+    bar_width = 0.8 / n_scenarios
+    fig, ax = plt.subplots(figsize=(max(10, n_nodes * 1.5), 6))
+
+    for i, (r, total) in enumerate(zip(sorted_results, total_caps)):
+        prices = np.array(r['variables']['p_{i,t}'][0], dtype=float)
+        profits = [
+            -1*float(np.dot(np.array(r['variables']['P^{batt}_{j,t}'][node], dtype=float), prices))
+            for node in range(n_nodes)
+        ]
+        offsets = nodes + (i - n_scenarios / 2 + 0.5) * bar_width
+        ax.bar(offsets, profits, width=bar_width, label=f'Cap = {total:.1f}')
+
+    ax.axhline(0, color='black', linewidth=0.8, linestyle='--')
+    ax.set_xlabel('Node')
+    ax.set_ylabel('Profit ($)')
+    ax.set_title('Battery Profit by Node')
+    ax.set_xticks(nodes)
+    ax.set_xticklabels([str(i) for i in range(n_nodes)])
+    ax.legend(title='Total Capacity (MWh)', bbox_to_anchor=(1.05, 1), loc='upper left')
+    ax.grid(axis='y', linestyle='--', alpha=0.5)
+    plt.tight_layout()
+    plt.savefig(OUT_PATH / 'node_profit_by_capacity.png', dpi=150, bbox_inches='tight')
+    # plt.show()
+    plt.close()
+    return
+
+
+def plot_capacity_allocation(results_list,OUT_PATH):
     """Grouped bar chart: per-node share of total capacity, one group per node, one bar per scenario.
 
     Each bar shows e^{batt}_{j,max}[node] / sum(e^{batt}_{j,max}) so bars within a
@@ -550,14 +606,17 @@ def main(date_string):
     
     for file in json_files:
         results_dict = get_results_dict(file)
-        # plot_battery_dispatch_3d(results_dict,OUT_PATH,normalize=False,filter_small_nodes=False)
-        plot_transmission_congestion(results_dict, OUT_PATH, filter_small_nodes=True)
-    #     results_list.append(results_dict)
-    # interestNode = 9
-    # plot_node_dispatch_by_capacity(results_list, interestNode, OUT_PATH)
-
-    # plot_objective_vs_capacity(results_list,OUT_PATH)
-    # plot_capacity_allocation(results_list,OUT_PATH)
+        plot_battery_dispatch_3d(results_dict,OUT_PATH,normalize=False,filter_small_nodes=False)
+        plot_transmission_congestion(results_dict,OUT_PATH,filter_small_nodes=True)
+        plot_slack_3d(results_dict, OUT_PATH, normalize=False, filter_small_nodes=False)
+        results_list.append(results_dict)
+    interestNode = 9
+    plot_node_dispatch_by_capacity(results_list, interestNode, OUT_PATH)
+    plot_node_slack_by_capacity(results_list, interestNode, OUT_PATH, normalize=False)
+    
+    plot_objective_vs_capacity(results_list,OUT_PATH)
+    plot_capacity_allocation(results_list,OUT_PATH)
+    plot_node_profit_by_capacity(results_list, OUT_PATH)
     return
 
 
