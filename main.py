@@ -48,6 +48,12 @@ def main() -> None:
             total_battery_capacity=batt_cap,
         )
 
+        if dayOptResults.status != "optimal":
+            print(
+                f"Optimization did not solve to optimality. Status: {dayOptResults.status}"
+            )
+            continue
+
         for key, value in dayOptResults.variables.items():
             print(f" {key}: {value.round(1)}")
 
