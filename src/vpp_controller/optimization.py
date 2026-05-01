@@ -37,8 +37,7 @@ def formulate_vpp_problem(
     delta_t: float,
     e_0: float,
     e_batt_max: float,
-    mu_P: float,
-    mu_Q: float,
+    mu_therm: float,
     v_0: float = 1.0,
 ) -> VPPFormulation:
     """
@@ -46,7 +45,7 @@ def formulate_vpp_problem(
 
     Variable keys in the returned dictionary intentionally match paper notation:
     - p_{i,t}, q_{i,t}, s_{i,t}, P_{ij,t}, Q_{ij,t}, L_{ij,t}, V_{i,t}
-    - delta^P_{i,t}, delta^Q_{i,t}
+    - delta_therm_{i,t} (thermal overload slack mapped to the feeder line feeding node i)
     - P^{ch}_{j,t}, P^{dis}_{j,t}, P^{batt}_{j,t}, Q^{batt}_{j,t}, S^{batt}_{j,t}, e_{j,t}
     - P^{batt}_{j,max}, e^{batt}_{j,max}
     """
@@ -109,10 +108,7 @@ def formulate_vpp_problem(
     L = cp.Variable((n_nodes, n_nodes, n_time), nonneg=True, name="L_{ij,t}")
     V = cp.Variable((n_nodes, n_time), name="V_{i,t}")
 
-    delta_P_pos = cp.Variable((n_nodes, n_time), nonneg=True, name="delta^P_{i,t,+}")
-    delta_P_neg = cp.Variable((n_nodes, n_time), nonneg=True, name="delta^P_{i,t,-}")
-    delta_Q_pos = cp.Variable((n_nodes, n_time), nonneg=True, name="delta^Q_{i,t,+}")
-    delta_Q_neg = cp.Variable((n_nodes, n_time), nonneg=True, name="delta^Q_{i,t,-}")
+    delta_therm = cp.Variable((n_nodes, n_time), nonneg=True, name="delta_therm_{i,t}")
 
     P_ch = cp.Variable((n_nodes, n_time), nonneg=True, name="P^{ch}_{j,t}")
     P_dis = cp.Variable((n_nodes, n_time), nonneg=True, name="P^{dis}_{j,t}")
@@ -123,9 +119,6 @@ def formulate_vpp_problem(
 
     P_batt_max = cp.Variable(n_nodes, nonneg=True, name="P^{batt}_{j,max}")
     e_batt_max_by_node = cp.Variable(n_nodes, nonneg=True, name="e^{batt}_{j,max}")
-
-    delta_P = delta_P_pos - delta_P_neg
-    delta_Q = delta_Q_pos - delta_Q_neg
 
     constraints: Dict[str, List[cp.Constraint]] = {}
 
@@ -211,6 +204,7 @@ def formulate_vpp_problem(
     constraints["reactive_power_balance"] = [Q[0, 0, :] == 0.0]
     constraints["voltage_balance"] = [V[0, :] == v_0**2]
     constraints["thermal_limits"] = []
+    constraints["thermal_slack_root"] = [delta_therm[root_node_idx, :] == 0.0]
     constraints["current_relation_relaxed"] = []
     for node in node_ids:
         j_idx = node_to_idx[node]
@@ -235,7 +229,6 @@ def formulate_vpp_problem(
                 - P_batt[j_idx, :]
                 + rij * L[i_idx, j_idx, :]
                 + A[j_idx, :] @ P[j_idx, :, :]
-                + delta_P[j_idx, :]
             )
         )
 
@@ -248,7 +241,6 @@ def formulate_vpp_problem(
                 - Q_batt[j_idx, :]
                 + xij * L[i_idx, j_idx, :]
                 + A[j_idx, :] @ Q[j_idx, :, :]
-                + delta_Q[j_idx, :]
             )
         )
 
@@ -260,8 +252,10 @@ def formulate_vpp_problem(
             - 2.0 * (rij * P[i_idx, j_idx, :] + xij * Q[i_idx, j_idx, :])
         )
 
-        # Thermal limit constraint (9)
-        constraints["thermal_limits"].append(L[i_idx, j_idx, :] <= I_max_ij**2)
+        # Thermal limit constraint (9), relaxed by the node slack on the incoming line.
+        constraints["thermal_limits"].append(
+            L[i_idx, j_idx, :] <= I_max_ij**2 + delta_therm[j_idx, :]
+        )
 
         # Current relation, relaxed (4)
         for t_idx in range(n_time):
@@ -288,10 +282,8 @@ def formulate_vpp_problem(
     constraints["no_battery_at_root"] = [e_batt_max_by_node[root_node_idx] == 0.0]
 
     generation_cost = cp.sum(cp.multiply(c, s))
-    imbalance_cost = mu_P * cp.sum(delta_P_pos + delta_P_neg) + mu_Q * cp.sum(
-        delta_Q_pos + delta_Q_neg
-    )
-    objective = cp.Minimize(generation_cost + imbalance_cost)
+    thermal_slack_cost = mu_therm * cp.sum(delta_therm)
+    objective = cp.Minimize(generation_cost + thermal_slack_cost)
 
     all_constraints = [con for group in constraints.values() for con in group]
     problem = cp.Problem(objective, all_constraints)
@@ -304,12 +296,7 @@ def formulate_vpp_problem(
         "Q_{ij,t}": Q,
         "L_{ij,t}": L,
         "V_{i,t}": V,
-        "delta^P_{i,t}": delta_P,
-        "delta^Q_{i,t}": delta_Q,
-        "delta^P_{i,t,+}": delta_P_pos,
-        "delta^P_{i,t,-}": delta_P_neg,
-        "delta^Q_{i,t,+}": delta_Q_pos,
-        "delta^Q_{i,t,-}": delta_Q_neg,
+        "delta_therm_{i,t}": delta_therm,
         "P^{ch}_{j,t}": P_ch,
         "P^{dis}_{j,t}": P_dis,
         "P^{batt}_{j,t}": P_batt,

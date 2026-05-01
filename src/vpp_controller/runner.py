@@ -149,8 +149,7 @@ def build_model_inputs(
         "delta_t": 1.0,
         "e_0": 0.0,
         "e_batt_max": float(total_battery_capacity),
-        "mu_P": 200.0,
-        "mu_Q": 80.0,
+        "mu_therm": 200.0,
         "v_0": 1.0,
     }
 

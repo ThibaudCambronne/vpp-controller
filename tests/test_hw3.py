@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 
 from vpp_controller.optimization import formulate_vpp_problem
-from vpp_controller.paths import DATA_DIR
+from vpp_controller.paths import DATA_NETWORKS_DIR
 from vpp_controller.runner import (
     build_model_inputs,
     solve_formulation_problem,
@@ -12,7 +12,7 @@ from vpp_controller.runner import (
 def test_hw3():
     """Test the optimization to see if we get the same as hw 3 when we run 1 timestep with no battery."""
 
-    topology_df = pd.read_csv(DATA_DIR / "homework3bus.csv")
+    topology_df = pd.read_csv(DATA_NETWORKS_DIR / "homework3bus.csv")
     print(topology_df.columns)
 
     # price series is just the price profile for node 0

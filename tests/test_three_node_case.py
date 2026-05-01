@@ -39,6 +39,7 @@ def test_1():
 
     eta_ch = 0.95
     eta_dis = 0.95
+    mu_therm = 200.0
 
     formulation = formulate_vpp_problem(
         N=n_set,
@@ -60,8 +61,7 @@ def test_1():
         delta_t=1.0,
         e_0=0.0,
         e_batt_max=max_energy_capacity,
-        mu_P=200.0,
-        mu_Q=80.0,
+        mu_therm=mu_therm,
         v_0=1.0,
     )
 
@@ -96,9 +96,14 @@ def test_1():
     assert s[0, 1] > 0.6, "Generation at node 0 should be around 1 MW at t=1."
     assert np.all(s[1:, :] < 1e-5), "There should be no generation at nodes 1 and 2."
 
+    thermal_slack = result.variables["delta_therm_{i,t}"]
+    assert thermal_slack[2, 1] > 1e-3, (
+        "Thermal overload slack should appear on the congested line feeding node 2."
+    )
+
     # assert that there is congestion on the second edge at t=1,
     # because we need to charge the battery there to meet the demand at t=2
-    assert (result.duals["thermal_limits"][2] >= 1).all(), (
+    assert np.isclose(result.duals["thermal_limits"][2], mu_therm, atol=1e-3).all(), (
         "There should be congestion on the line between node 1 and node 2 at t=1."
     )
 
@@ -144,8 +149,7 @@ def run_test_case_and_solve(
         "Q_{ij,t}",
         "L_{ij,t}",
         "V_{i,t}",
-        "delta^P_{i,t}",
-        "delta^Q_{i,t}",
+        "delta_therm_{i,t}",
         "P^{ch}_{j,t}",
         "P^{dis}_{j,t}",
         "P^{batt}_{j,t}",
