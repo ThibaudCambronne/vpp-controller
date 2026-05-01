@@ -1,0 +1,168 @@
+# ==============================================================================
+#  WELL SCREENER
+#  Filter individual wells by any combination of criteria.
+#  Leave any filter as None to skip it.
+# ==============================================================================
+
+# ── Filter configuration ──────────────────────────────────────────────────────
+WELL_SCREEN_IDLE         = None    # True / False
+WELL_SCREEN_MARGINAL     = None    # True = currently marginal; False = not currently marginal
+WELL_SCREEN_OPERATOR     = None    # str or list: name fragment(s), case-insensitive OR match
+WELL_SCREEN_DISTRICT     = 'Aztec'    # str or list of district values (exact match)
+WELL_SCREEN_WELL_TYPE    = ['oil']    # 'oil', 'gas', 'dual', 'unproductive', or list of these
+WELL_SCREEN_MIN_AGE      = None    # int: minimum first-production year  (e.g. 1985)
+WELL_SCREEN_MAX_AGE      = None    # int: maximum first-production year  (e.g. 2005)
+WELL_SCREEN_MIN_ACQ      = None    # int: minimum number of ownership transfers
+WELL_SCREEN_MAX_ACQ      = None    # int: maximum number of ownership transfers
+WELL_SCREEN_MIN_REV_M    = None    # float: minimum lifetime revenue ($M)
+WELL_SCREEN_MAX_REV_M    = None    # float: maximum lifetime revenue ($M)
+WELL_SCREEN_PHASE        = None    # str or list: 'Peak', 'Ramp-Up', 'Declining',
+                                   #              'Low Production', 'Marginal'
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── 1. Build per-well summary ─────────────────────────────────────────────────
+
+# Lifetime totals from prod_full (includes revenue + phase info)
+well_summary = (
+    prod_full.groupby('wellApi')
+    .agg(
+        total_prod     =('annualProd', 'sum'),
+        lifetime_rev   =('revenue',    'sum'),
+        n_well_years   =('productionYear', 'count'),
+        pct_marginal_wy=('isMarginal',  'mean'),
+    )
+    .reset_index()
+)
+well_summary['lifetime_rev_M']  = (well_summary['lifetime_rev'] / 1e6).round(2)
+well_summary['pct_marginal_wy'] = (well_summary['pct_marginal_wy'] * 100).round(1)
+
+# Current phase = phase in the most recent production year
+_cur_phase = (
+    prod_full.sort_values('productionYear')
+    .groupby('wellApi')
+    .last()[['productionYear', 'phase', 'isMarginal', 'operatorName']]
+    .reset_index()
+    .rename(columns={'productionYear': 'last_prod_year',
+                     'operatorName':   'current_operator'})
+)
+well_summary = well_summary.merge(_cur_phase, on='wellApi', how='left')
+well_summary['is_marginal_now'] = well_summary['isMarginal'].fillna(False)
+
+# Ownership transfer count per well
+_acq_count = (
+    prod_full[prod_full['isNewOwner']]
+    .groupby('wellApi').size().rename('n_acquisitions').reset_index()
+)
+well_summary = well_summary.merge(_acq_count, on='wellApi', how='left')
+well_summary['n_acquisitions'] = well_summary['n_acquisitions'].fillna(0).astype(int)
+
+# Attach metadata: firstProdYear, peakDailyRate, wellType, peakDailyOil, peakDailyGas
+well_summary = well_summary.merge(
+    well_stats[['wellApi', 'firstProdYear', 'lastProdYear',
+                'peakDailyRate', 'totalLifetime']],
+    on='wellApi', how='left'
+)
+well_summary = well_summary.merge(
+    well_types[['wellApi', 'wellType', 'peakDailyOil', 'peakDailyGas']],
+    on='wellApi', how='left'
+)
+
+# isIdle, district, spud_year from nmocdAll
+_meta = nmocdAll[['api', 'isIdle']]
+_district_col = [c for c in ['district'] if c in nmocdAll.columns]
+_spud_col     = [c for c in ['spud_year'] if c in nmocdAll.columns]
+for c in _district_col + _spud_col:
+    _meta = nmocdAll[['api', 'isIdle'] + _district_col + _spud_col].drop_duplicates('api')
+    break
+well_summary = well_summary.merge(
+    _meta.rename(columns={'api': 'wellApi'}), on='wellApi', how='left'
+)
+
+# ── 2. Apply filters ──────────────────────────────────────────────────────────
+mask = pd.Series(True, index=well_summary.index)
+
+if WELL_SCREEN_WELL_TYPE is not None:
+    types_wanted = ([WELL_SCREEN_WELL_TYPE] if isinstance(WELL_SCREEN_WELL_TYPE, str)
+                    else list(WELL_SCREEN_WELL_TYPE))
+    mask &= well_summary['wellType'].isin(types_wanted)
+
+if WELL_SCREEN_IDLE is not None:
+    mask &= well_summary['isIdle'] == WELL_SCREEN_IDLE
+
+if WELL_SCREEN_MARGINAL is not None:
+    mask &= well_summary['is_marginal_now'] == WELL_SCREEN_MARGINAL
+
+if WELL_SCREEN_OPERATOR is not None:
+    frags = ([WELL_SCREEN_OPERATOR] if isinstance(WELL_SCREEN_OPERATOR, str)
+             else list(WELL_SCREEN_OPERATOR))
+    def _op_match(op):
+        if pd.isna(op): return False
+        return any(f.upper() in str(op).upper() for f in frags)
+    mask &= well_summary['current_operator'].apply(_op_match)
+
+if WELL_SCREEN_DISTRICT is not None:
+    dists = ([WELL_SCREEN_DISTRICT] if isinstance(WELL_SCREEN_DISTRICT, str)
+             else list(WELL_SCREEN_DISTRICT))
+    dists_upper = [str(d).strip().upper() for d in dists]
+    if 'district' in well_summary.columns:
+        mask &= well_summary['district'].astype(str).str.strip().str.upper().isin(dists_upper)
+
+if WELL_SCREEN_MIN_AGE is not None:
+    mask &= well_summary['firstProdYear'] >= WELL_SCREEN_MIN_AGE
+
+if WELL_SCREEN_MAX_AGE is not None:
+    mask &= well_summary['firstProdYear'] <= WELL_SCREEN_MAX_AGE
+
+if WELL_SCREEN_MIN_ACQ is not None:
+    mask &= well_summary['n_acquisitions'] >= WELL_SCREEN_MIN_ACQ
+
+if WELL_SCREEN_MAX_ACQ is not None:
+    mask &= well_summary['n_acquisitions'] <= WELL_SCREEN_MAX_ACQ
+
+if WELL_SCREEN_MIN_REV_M is not None:
+    mask &= well_summary['lifetime_rev_M'] >= WELL_SCREEN_MIN_REV_M
+
+if WELL_SCREEN_MAX_REV_M is not None:
+    mask &= well_summary['lifetime_rev_M'] <= WELL_SCREEN_MAX_REV_M
+
+if WELL_SCREEN_PHASE is not None:
+    phases = ([WELL_SCREEN_PHASE] if isinstance(WELL_SCREEN_PHASE, str)
+              else list(WELL_SCREEN_PHASE))
+    mask &= well_summary['phase'].isin(phases)
+
+results_wells = well_summary[mask].copy().sort_values('lifetime_rev_M', ascending=False)
+
+# ── 3. Display ────────────────────────────────────────────────────────────────
+print(f"Wells matching all criteria: {len(results_wells):,}  "
+      f"(of {len(well_summary):,} total wells in {COMMODITY.upper()} analysis)\n")
+
+display_cols = ['wellApi',
+                'wellType', 'isIdle', 'is_marginal_now', 'phase',
+                'current_operator']
+if 'district'   in results_wells.columns: display_cols.append('district')
+if 'spud_year'  in results_wells.columns: display_cols.append('spud_year')
+display_cols += ['firstProdYear', 'last_prod_year', 'n_acquisitions',
+                 'lifetime_rev_M', 'total_prod',
+                 'peakDailyRate', 'peakDailyOil', 'peakDailyGas',
+                 'pct_marginal_wy', 'n_well_years']
+display_cols = [c for c in display_cols if c in results_wells.columns]
+
+results_wells['total_prod']    = results_wells['total_prod'].round(0)
+results_wells['peakDailyRate'] = results_wells['peakDailyRate'].round(2)
+results_wells['peakDailyOil']  = results_wells['peakDailyOil'].round(2)
+results_wells['peakDailyGas']  = results_wells['peakDailyGas'].round(2)
+
+print("Column guide:")
+print("  is_marginal_now  : well's most recent production year is below marginal threshold")
+print("  phase            : lifecycle phase in most recent production year")
+print("  n_acquisitions   : number of ownership transfers this well has experienced")
+print("  pct_marginal_wy  : % of all well-years that were marginal over its lifetime")
+print("  peakDailyOil/Gas : peak daily oil (BOE/day) and gas (MCF/day) ever recorded\n")
+
+with pd.option_context('display.max_rows', 500, 'display.max_columns', 30,
+                        'display.width', 220):
+    print(results_wells[display_cols].to_string(index=False))
+
+pfx = cfg['csv_prefix']
+results_wells[display_cols].to_csv(os.path.join(ASSETS_DIR, f'{pfx}_well_screen.csv'), index=False)
+print(f"\nSaved: {pfx}_well_screen.csv  ({len(results_wells):,} rows)")

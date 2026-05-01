@@ -1,0 +1,254 @@
+# ==============================================================================
+#  OPERATOR SCREENER
+#  Find operators matching any combination of criteria.
+#  Leave any filter as None to skip it.
+# ==============================================================================
+
+# ── Filter configuration ──────────────────────────────────────────────────────
+SCREEN_DISTRICT      = 'Aztec'   # str or list of str: operator must have wells in district(s)
+SCREEN_MIN_ACQ_PCT   = None   # float 0-100: min % of wells that were acquired (not original)
+SCREEN_WELL_TYPE     = 'oil'   # 'oil', 'gas', 'dual', or list of these
+SCREEN_MIN_WELLS     = 40   # int: minimum unique well count
+SCREEN_MAX_WELLS     = 100   # int: maximum unique well count
+SCREEN_MIN_REVENUE_M = None   # float: minimum total revenue in $M
+SCREEN_MAX_REVENUE_M = None   # float: maximum total revenue in $M
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── 1. Build per-operator summary ─────────────────────────────────────────────
+# pct_marginal_wy = well-years marginal / total well-years across all their wells.
+# For dual mode, isMarginal already uses combined BOE (oil + gas/6 < 15 BOE/day).
+op_screen = (
+    prod_full.groupby('operatorName')
+    .agg(
+        n_wells       =('wellApi', 'nunique'),
+        n_well_years  =('wellApi', 'count'),
+        total_prod    =('annualProd', 'sum'),
+        total_rev     =('revenue', 'sum'),
+        avg_daily     =('dailyRate', 'mean'),
+        pct_marginal_wy=('isMarginal', 'mean'),
+        pct_peak      =('phase', lambda x: (x == 'Peak').mean()),
+    )
+    .reset_index()
+)
+
+# Attach isIdle from nmocdAll to each well, then compute % idle per operator
+_well_idle = (nmocdAll[['api', 'isIdle']]
+              .rename(columns={'api': 'wellApi'})
+              .drop_duplicates(subset=['wellApi']))
+_op_idle = (
+    prod_full[['wellApi', 'operatorName']].drop_duplicates()
+    .merge(_well_idle, on='wellApi', how='left')
+    .groupby('operatorName')
+    .agg(n_idle_wells=('isIdle', 'sum'), _n=('wellApi', 'count'))
+    .reset_index()
+)
+_op_idle['pct_idle'] = (100 * _op_idle['n_idle_wells'] / _op_idle['_n'].clip(lower=1)).round(1)
+op_screen = op_screen.merge(_op_idle[['operatorName', 'pct_idle']], on='operatorName', how='left')
+op_screen['total_rev_M']     = op_screen['total_rev'] / 1e6
+op_screen['pct_marginal_wy'] = (op_screen['pct_marginal_wy'] * 100).round(1)
+op_screen['pct_peak']        = (op_screen['pct_peak'] * 100).round(1)
+
+# ── 2. Acquisition percentage ─────────────────────────────────────────────────
+acq_by_op = (
+    prod_full[prod_full['isNewOwner']]
+    .groupby('operatorName')['wellApi'].nunique()
+    .rename('n_acquired').reset_index()
+)
+op_screen = op_screen.merge(acq_by_op, on='operatorName', how='left')
+op_screen['n_acquired']   = op_screen['n_acquired'].fillna(0).astype(int)
+op_screen['pct_acquired'] = (100 * op_screen['n_acquired']
+                              / op_screen['n_wells'].clip(lower=1)).round(1)
+
+# ── 3. Well-type mix ──────────────────────────────────────────────────────────
+wt_op = (
+    prod_full[['wellApi', 'operatorName']].drop_duplicates()
+    .merge(well_types[['wellApi', 'wellType']], on='wellApi', how='left')
+)
+wt_mix = (
+    wt_op.groupby(['operatorName', 'wellType']).size()
+    .unstack(fill_value=0).reset_index()
+)
+for wt in ['oil', 'gas', 'dual', 'unproductive']:
+    if wt not in wt_mix.columns:
+        wt_mix[wt] = 0
+op_screen = op_screen.merge(
+    wt_mix[['operatorName', 'oil', 'gas', 'dual', 'unproductive']],
+    on='operatorName', how='left')
+
+# ── 4. Districts ──────────────────────────────────────────────────────────────
+if 'district' in nmocdAll.columns:
+    api_district = (nmocdAll[['api', 'district']].dropna(subset=['district'])
+                    .rename(columns={'api': 'wellApi'}))
+    op_districts = (
+        prod_full[['wellApi', 'operatorName']].drop_duplicates()
+        .merge(api_district, on='wellApi', how='left')
+        .groupby('operatorName')['district']
+        .apply(lambda x: sorted(x.dropna().unique().tolist()))
+        .rename('districts').reset_index()
+    )
+    op_screen = op_screen.merge(op_districts, on='operatorName', how='left')
+else:
+    op_screen['districts'] = None
+
+# ── 5. Lat / lon stats per operator ──────────────────────────────────────────
+# Identify lat/lon columns in nmocdAll (handles common name variants)
+lat_col = next((c for c in nmocdAll.columns
+                if c in ['latitude', 'lat', 'surface_latitude']), None)
+lon_col = next((c for c in nmocdAll.columns
+                if c in ['longitude', 'lon', 'long', 'surface_longitude']), None)
+
+has_coords = lat_col is not None and lon_col is not None
+if has_coords:
+    well_coords = (nmocdAll[['api', lat_col, lon_col]]
+                   .dropna(subset=[lat_col, lon_col])
+                   .rename(columns={'api': 'wellApi', lat_col: 'lat', lon_col: 'lon'}))
+    # Map each well to its most recent operator
+    well_op = (prod_full[['wellApi', 'operatorName']].drop_duplicates()
+               .merge(well_coords, on='wellApi', how='inner'))
+    loc_stats = (
+        well_op.groupby('operatorName')
+        .agg(lat_mean=('lat', 'mean'), lon_mean=('lon', 'mean'),
+             lat_std =('lat', 'std'),  lon_std =('lon', 'std'))
+        .round(4).reset_index()
+    )
+    op_screen = op_screen.merge(loc_stats, on='operatorName', how='left')
+else:
+    print("Warning: no latitude/longitude columns found in ExpandedWells.csv; "
+          "map and location stats will be skipped.")
+
+# ── 6. Apply filters ──────────────────────────────────────────────────────────
+mask = pd.Series(True, index=op_screen.index)
+
+if SCREEN_DISTRICT is not None:
+    districts_wanted = ([SCREEN_DISTRICT] if isinstance(SCREEN_DISTRICT, str)
+                        else list(SCREEN_DISTRICT))
+    def _has_district(d_list):
+        if not isinstance(d_list, list): return False
+        return any(str(d).strip().upper() in [str(w).strip().upper()
+                   for w in districts_wanted] for d in d_list)
+    mask &= op_screen['districts'].apply(_has_district)
+
+if SCREEN_MIN_ACQ_PCT is not None:
+    mask &= op_screen['pct_acquired'] >= SCREEN_MIN_ACQ_PCT
+
+if SCREEN_WELL_TYPE is not None:
+    types_wanted = ([SCREEN_WELL_TYPE] if isinstance(SCREEN_WELL_TYPE, str)
+                    else list(SCREEN_WELL_TYPE))
+    def _has_type(row):
+        return any(row.get(t, 0) > 0 for t in types_wanted)
+    mask &= op_screen.apply(_has_type, axis=1)
+
+if SCREEN_MIN_WELLS is not None:
+    mask &= op_screen['n_wells'] >= SCREEN_MIN_WELLS
+
+if SCREEN_MAX_WELLS is not None:
+    mask &= op_screen['n_wells'] <= SCREEN_MAX_WELLS
+
+if SCREEN_MIN_REVENUE_M is not None:
+    mask &= op_screen['total_rev_M'] >= SCREEN_MIN_REVENUE_M
+
+if SCREEN_MAX_REVENUE_M is not None:
+    mask &= op_screen['total_rev_M'] <= SCREEN_MAX_REVENUE_M
+
+results = op_screen[mask].copy().sort_values('total_rev_M', ascending=False)
+
+# ── 7. Print results table ────────────────────────────────────────────────────
+print(f"Operators matching all criteria: {len(results):,}  "
+      f"(of {len(op_screen):,} total operators with {COMMODITY} activity)\n")
+
+display_cols = ['operatorName', 'n_wells', 'n_well_years',
+                'n_acquired', 'pct_acquired',
+                'oil', 'gas', 'dual',
+                'total_prod', 'total_rev_M', 'avg_daily',
+                'pct_marginal_wy', 'pct_peak', 'pct_idle',
+                'lat_mean', 'lon_mean', 'lat_std', 'lon_std',
+                'districts']
+display_cols = [c for c in display_cols if c in results.columns]
+
+results['total_prod']  = results['total_prod'].round(0).astype(int)
+results['total_rev_M'] = results['total_rev_M'].round(2)
+results['avg_daily']   = results['avg_daily'].round(2)
+
+print("Column guide:")
+print("  pct_marginal_wy : % of well-years below marginal threshold (combined BOE in dual mode)")
+print("  pct_acquired    : % of wells received via ownership transfer (not original operator)")
+print("  pct_idle        : % of wells idle (no production in past {IDLE_MONTHS} months)")
+print("  lat/lon _std    : spatial spread in degrees; smaller = more geographically clustered\n")
+
+with pd.option_context('display.max_rows', 200, 'display.max_columns', 30,
+                        'display.width', 220):
+    print(results[display_cols].to_string(index=False))
+
+# ── 8. Map: well locations coloured by operator ───────────────────────────────
+if has_coords and len(results) > 0:
+    matched_ops   = set(results['operatorName'])
+    matched_wells = well_op[well_op['operatorName'].isin(matched_ops)].copy()
+
+    # Assign a colour index to each unique operator
+    unique_ops = matched_wells['operatorName'].unique()
+    cmap       = plt.get_cmap('tab20' if len(unique_ops) <= 20 else 'turbo')
+    op_color   = {op: cmap(i / max(len(unique_ops) - 1, 1))
+                  for i, op in enumerate(unique_ops)}
+
+    fig, ax = plt.subplots(figsize=(12, 10))
+
+    # Background: all wells in light grey for spatial context
+    if len(well_coords) > 0:
+        ax.scatter(well_coords['lon'], well_coords['lat'],
+                   s=1, c='#cccccc', alpha=0.25, linewidths=0, zorder=1,
+                   label='_nolegend_')
+
+    # Screened operators' wells, coloured by operator
+    for op in unique_ops:
+        sub = matched_wells[matched_wells['operatorName'] == op]
+        ax.scatter(sub['lon'], sub['lat'],
+                   s=8, color=op_color[op], alpha=0.65, linewidths=0,
+                   zorder=2, label='_nolegend_')
+
+    # Mark each operator's centroid with a larger marker + label for the
+    # top-N operators by well count (so the map isn't overwhelmed with text)
+    centroid_label_n = min(15, len(results))
+    top_label = results.nlargest(centroid_label_n, 'n_wells')['operatorName']
+    for op in top_label:
+        if op not in op_color: continue
+        row = results[results['operatorName'] == op].iloc[0]
+        clat = row.get('lat_mean', np.nan); clon = row.get('lon_mean', np.nan)
+        if pd.isna(clat) or pd.isna(clon): continue
+        ax.scatter(clon, clat, s=60, color=op_color[op],
+                   edgecolors='black', linewidths=0.6, zorder=4)
+        ax.annotate(op[:25], (clon, clat),
+                    textcoords='offset points', xytext=(4, 3),
+                    fontsize=6.5, color=op_color[op],
+                    bbox=dict(boxstyle='round,pad=0.15', fc='white',
+                              alpha=0.6, lw=0), zorder=5)
+
+    n_unlabelled = len(unique_ops) - centroid_label_n
+    title_note   = (f" (centroids labelled for top {centroid_label_n} by well count"
+                    f"; {n_unlabelled} others unlabelled)" if n_unlabelled > 0 else "")
+    ax.set_xlabel('Longitude', fontsize=11)
+    ax.set_ylabel('Latitude',  fontsize=11)
+    ax.set_title(
+        f"{cfg['title_prefix']} -- Screened Operator Well Locations\n"
+        f"{len(unique_ops)} operators, {len(matched_wells):,} wells shown{title_note}",
+        fontsize=12)
+    plt.tight_layout()
+    pfx = cfg['csv_prefix']
+    plt.savefig(os.path.join(ASSETS_DIR, f'{pfx}_operator_screen_map.png'), dpi=150, bbox_inches='tight')
+    plt.show()
+    print(f"Saved: {pfx}_operator_screen_map.png")
+
+    # ── Clustering summary ────────────────────────────────────────────────────
+    loc_cols = ['operatorName', 'n_wells', 'lat_mean', 'lon_mean',
+                'lat_std', 'lon_std']
+    loc_cols = [c for c in loc_cols if c in results.columns]
+    clust = (results[loc_cols].dropna(subset=['lat_std', 'lon_std'])
+             .sort_values('lat_std'))
+    clust['combined_std'] = ((clust['lat_std']**2 + clust['lon_std']**2)**0.5).round(4)
+    print("\nOperator spatial clustering (sorted most → least clustered):")
+    print("  combined_std = sqrt(lat_std² + lon_std²); lower = more concentrated")
+    with pd.option_context('display.max_rows', 100, 'display.width', 160):
+        print(clust.assign(combined_std=clust['combined_std']).to_string(index=False))
+
+pfx = cfg['csv_prefix']
+results[display_cols].to_csv(os.path.join(ASSETS_DIR, f'{pfx}_operator_screen.csv'), index=False)
+print(f"\nSaved: {pfx}_operator_screen.csv")
