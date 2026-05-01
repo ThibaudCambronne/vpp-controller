@@ -174,6 +174,11 @@ def run_test_case_and_solve(
     assert np.min(P_ch) >= -1e-7, "Charging power must be nonnegative."
     assert np.min(P_dis) >= -1e-7, "Discharging power must be nonnegative."
 
+    # Make sure that we don't have simultaneous charging and discharging for the battery at any time step
+    assert np.all(np.abs(P_ch * P_dis) <= 1e-3), (
+        "Simultaneous charging and discharging is not allowed."
+    )
+
     soc_residual = (
         e[:, 1:] - e[:, :-1] - (eta_ch * P_ch - (1.0 / eta_dis) * P_dis) * delta_t
     )
