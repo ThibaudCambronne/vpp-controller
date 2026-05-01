@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//c/Users/cloit/Documents/Grad School/Second Semester/Carbon Containment Lab/**)",
+      "Bash(python _patch_notebook.py)",
+      "Bash(python -c ' *)",
+      "Bash(python _patch2.py)",
+      "Bash(python _patch3.py)",
+      "Bash(python _make_predictor.py)",
+      "Bash(python _fix_feat_loop.py)",
+      "Bash(python _fix_timeline.py)"
+    ],
+    "additionalDirectories": [
+      "c:\\Users\\cloit\\Documents\\Grad School\\Second Semester\\Carbon Containment Lab"
+    ]
+  }
+}

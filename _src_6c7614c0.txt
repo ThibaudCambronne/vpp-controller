@@ -1,0 +1,185 @@
+# ==============================================================================
+#  OPERATOR DEEP-DIVE
+#  OPERATOR_SEARCH: list of name fragments (case-insensitive OR match).
+#  Each entry produces its own full analysis.  Set in the Configuration cell.
+#  Example: OPERATOR_SEARCH = ['BIYA', 'PERMIAN', 'XTO']
+# ==============================================================================
+
+for search_term in OPERATOR_SEARCH:
+    matched = sorted([op for op in prod_full['operatorName'].dropna().unique()
+                      if search_term.upper() in str(op).upper()])
+    if not matched:
+        print(f"No operators found matching '{search_term}'\n")
+        continue
+
+    print(f"\n{'='*70}")
+    print(f"  OPERATOR DEEP-DIVE: '{search_term}'")
+    print(f"  Matched   : {matched}")
+    print(f"{'='*70}")
+
+    # All well-years where this operator group was active
+    op_prod = prod_full[prod_full['operatorName'].isin(matched)].copy()
+    op_apis = op_prod['wellApi'].unique()
+
+    # Full production history of those wells (all operators)
+    op_well_hist = prod_full[prod_full['wellApi'].isin(op_apis)].copy()
+
+    # ── Summary stats ────────────────────────────────────────────────────────
+    total_rev = op_prod['revenue'].sum()
+    print(f"\nSummary while operating:")
+    print(f"  Well-years active          : {len(op_prod):,}")
+    print(f"  Unique wells ever operated : {len(op_apis):,}")
+    print(f"  Year range                 : "
+          f"{int(op_prod['productionYear'].min())}-{int(op_prod['productionYear'].max())}")
+    print(f"  Total production           : {op_prod['annualProd'].sum():,.0f} {cfg['units']}")
+    if not pd.isna(total_rev):
+        print(f"  Total revenue (est.)       : ${total_rev/1e6:.2f}M")
+    print(f"  Avg daily rate             : {op_prod['dailyRate'].mean():.1f} {cfg['rate_label']}")
+    print(f"\n  Phase distribution while operating:")
+    print(op_prod['phase'].value_counts().reindex(PHASE_ORDER).fillna(0).astype(int).to_string())
+
+    # ── Plot A: Annual production / revenue / active-well count ──────────────
+    annual_op = op_prod.groupby('productionYear').agg(
+        total_prod=('annualProd', 'sum'),
+        total_rev=('revenue', 'sum'),
+        n_wells=('wellApi', 'nunique'),
+    ).reset_index()
+
+    fig, axes = plt.subplots(3, 1, figsize=(13, 10), sharex=True)
+    axes[0].bar(annual_op['productionYear'], annual_op['total_prod'],
+                color='steelblue', alpha=0.8, width=0.8)
+    axes[0].set_ylabel(cfg['annual_label'])
+    axes[0].set_title(f'Annual {cfg["title_prefix"]} Production')
+
+    rev_yr = annual_op.dropna(subset=['total_rev'])
+    if len(rev_yr):
+        axes[1].bar(rev_yr['productionYear'], rev_yr['total_rev']/1e6,
+                    color='darkorange', alpha=0.8, width=0.8)
+    axes[1].set_ylabel('Revenue (USD millions)')
+    axes[1].set_title('Annual Revenue (estimated from spot price)')
+
+    axes[2].bar(annual_op['productionYear'], annual_op['n_wells'],
+                color='seagreen', alpha=0.8, width=0.8)
+    axes[2].set_ylabel('# Active Wells')
+    axes[2].set_title('Active Well Count')
+    axes[2].set_xlabel('Year')
+
+    plt.suptitle(f"{cfg['title_prefix']} -- Operator: {search_term}\n"
+                 f"Matched: {matched}", fontsize=12)
+    plt.tight_layout()
+    plt.savefig(os.path.join(ASSETS_DIR, f'{cfg["csv_prefix"]}_{search_term.lower()}_annual_overview.png'),
+                dpi=150, bbox_inches='tight')
+    plt.show()
+
+    # ── Plot B: Phase distribution + lifecycle curve ──────────────────────────
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+
+    op_ph = op_prod['phase'].value_counts().reindex(PHASE_ORDER).fillna(0)
+    bars = axes[0].bar(op_ph.index, op_ph.values,
+                       color=[PHASE_COLORS[p] for p in PHASE_ORDER])
+    axes[0].bar_label(bars, fmt='{:,.0f}', padding=3, fontsize=9)
+    axes[0].set_title(f'Phase Distribution While Operating\n({search_term})')
+    axes[0].set_ylabel('Well-year count')
+
+    # Lifecycle curve: all operators, for wells this operator ever held
+    if 'yearsFromPeak' in op_well_hist.columns:
+        lc_op = (op_well_hist.groupby('yearsFromPeak')['annualProd']
+                 .agg(median='median',
+                      q25=lambda x: x.quantile(0.25),
+                      q75=lambda x: x.quantile(0.75), count='count')
+                 .reset_index().query('count >= 3'))
+        if len(lc_op):
+            axes[1].plot(lc_op['yearsFromPeak'], lc_op['median'], lw=2.5,
+                         color='steelblue', label='Median (all operators, these wells)')
+            axes[1].fill_between(lc_op['yearsFromPeak'], lc_op['q25'], lc_op['q75'],
+                                 alpha=0.2, color='steelblue')
+        # Shade the years-from-peak range while this operator held the wells
+        yfp_vals = op_prod['yearsFromPeak']
+        yfp_min = yfp_vals.min(); yfp_max = yfp_vals.max()
+        axes[1].axvspan(yfp_min, yfp_max, alpha=0.18, color='green',
+                        label=f'{search_term} operating window\n'
+                              f'[{yfp_min:+.0f}, {yfp_max:+.0f}] yrs from peak')
+        axes[1].axvline(0, color='red', linestyle='--', lw=1.5, label='Peak year')
+        axes[1].set_xlabel('Years relative to peak production year')
+        axes[1].set_ylabel(cfg['annual_label'])
+        axes[1].set_title(f'Well Lifecycle -- Wells Ever Held by {search_term}')
+        axes[1].legend(fontsize=8.5, framealpha=0.88)
+
+    plt.suptitle(f"{cfg['title_prefix']} -- {search_term}", fontsize=12)
+    plt.tight_layout()
+    plt.savefig(os.path.join(ASSETS_DIR, f'{cfg["csv_prefix"]}_{search_term.lower()}_lifecycle.png'),
+                dpi=150, bbox_inches='tight')
+    plt.show()
+
+    # ── Plot C: Acquisition analysis ─────────────────────────────────────────
+    op_acq = acquisitions[acquisitions['operatorName'].isin(matched)].copy()
+    if len(op_acq) > 0:
+        print(f"\nAcquisitions by {search_term}: {len(op_acq)}")
+        print(f"  Avg daily rate at acquisition : {op_acq['dailyRate'].mean():.1f} {cfg['rate_label']}")
+        print(f"  Avg pct of peak at acquisition: {op_acq['pctOfPeak'].mean()*100:.1f}%")
+        print(f"  Phase at acquisition:")
+        print(op_acq['phase'].value_counts().reindex(PHASE_ORDER).fillna(0).astype(int).to_string())
+
+        fig, ax = plt.subplots(figsize=(9, 4))
+        op_acq_ph = op_acq['phase'].value_counts().reindex(PHASE_ORDER).fillna(0)
+        bars = ax.bar(op_acq_ph.index, op_acq_ph.values,
+                      color=[PHASE_COLORS[p] for p in PHASE_ORDER])
+        ax.bar_label(bars, fmt='{:,.0f}', padding=3)
+        ax.set_title(f'{search_term} -- Well Phase at Time of Acquisition')
+        ax.set_ylabel('Count')
+        plt.tight_layout()
+        plt.savefig(os.path.join(ASSETS_DIR, f'{cfg["csv_prefix"]}_{search_term.lower()}_acquisitions.png'),
+                    dpi=150, bbox_inches='tight')
+        plt.show()
+    else:
+        print(f"\nNo acquisition events recorded for {search_term}")
+
+    # ── Table: per-well productivity while under this operator ────────────────
+    well_table = (
+        op_prod.groupby('wellApi')
+        .agg(years_held=('productionYear', 'count'),
+             first_year_held=('productionYear', 'min'),
+             last_year_held=('productionYear', 'max'),
+             total_prod=('annualProd', 'sum'),
+             avg_daily_rate=('dailyRate', 'mean'),
+             total_revenue=('revenue', 'sum'),
+             most_common_phase=('phase', lambda x: x.mode().iloc[0]),
+             pct_marginal=('isMarginal', 'mean'))
+        .reset_index()
+    )
+    well_table = well_table.merge(
+        well_types[['wellApi', 'wellType', 'peakDailyOil', 'peakDailyGas']],
+        on='wellApi', how='left')
+    meta_join = nmocdAll[['api', 'district', 'spud_year']].rename(columns={'api': 'wellApi'})
+    well_table = well_table.merge(meta_join, on='wellApi', how='left')
+
+    well_table['total_prod']     = well_table['total_prod'].round(0).astype(int)
+    well_table['avg_daily_rate'] = well_table['avg_daily_rate'].round(1)
+    well_table['total_rev_M']    = (well_table['total_revenue'] / 1e6).round(3)
+    well_table['pct_marginal']   = (well_table['pct_marginal']*100).round(1).astype(str)+'%'
+
+    print(f"\nPer-well productivity while under {search_term}:")
+    show = ['wellApi', 'district', 'spud_year', 'wellType',
+            'years_held', 'first_year_held', 'last_year_held',
+            'total_prod', 'avg_daily_rate', 'total_rev_M',
+            'most_common_phase', 'pct_marginal', 'peakDailyOil', 'peakDailyGas']
+    show = [c for c in show if c in well_table.columns]
+    with pd.option_context('display.max_rows', 300, 'display.max_columns', 20,
+                           'display.width', 180):
+        print(well_table[show].sort_values('total_prod', ascending=False).to_string(index=False))
+
+    well_table.to_csv(os.path.join(ASSETS_DIR, f'{cfg["csv_prefix"]}_{search_term.lower()}_wells.csv'), index=False)
+    print(f"\nSaved: {cfg['csv_prefix']}_{search_term.lower()}_wells.csv")
+
+    # ── Ownership transition history for these wells ──────────────────────────
+    print(f"\nOwnership transitions for wells ever held by {search_term}:")
+    transitions = (
+        prod_full[prod_full['wellApi'].isin(op_apis) & prod_full['isNewOwner']]
+        [['wellApi', 'productionYear', 'prevOperator', 'operatorName', 'phase', 'pctOfPeak']]
+        .copy()
+    )
+    transitions['pctOfPeak'] = (transitions['pctOfPeak']*100).round(1).astype(str)+'%'
+    with pd.option_context('display.max_rows', 300, 'display.width', 160):
+        print(transitions.sort_values(['wellApi', 'productionYear']).to_string(index=False))
+
+    print(f"\n{'─'*70}")

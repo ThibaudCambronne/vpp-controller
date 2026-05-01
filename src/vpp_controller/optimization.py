@@ -109,10 +109,12 @@ def formulate_vpp_problem(
     L = cp.Variable((n_nodes, n_nodes, n_time), nonneg=True, name="L_{ij,t}")
     V = cp.Variable((n_nodes, n_time), name="V_{i,t}")
 
-    delta_P_pos = cp.Variable((n_nodes, n_time), nonneg=True, name="delta^P_{i,t,+}")
-    delta_P_neg = cp.Variable((n_nodes, n_time), nonneg=True, name="delta^P_{i,t,-}")
-    delta_Q_pos = cp.Variable((n_nodes, n_time), nonneg=True, name="delta^Q_{i,t,+}")
-    delta_Q_neg = cp.Variable((n_nodes, n_time), nonneg=True, name="delta^Q_{i,t,-}")
+    # delta_P_pos = cp.Variable((n_nodes, n_time), nonneg=True, name="delta^P_{i,t,+}")
+    # delta_P_neg = cp.Variable((n_nodes, n_time), nonneg=True, name="delta^P_{i,t,-}")
+    # delta_Q_pos = cp.Variable((n_nodes, n_time), nonneg=True, name="delta^Q_{i,t,+}")
+    # delta_Q_neg = cp.Variable((n_nodes, n_time), nonneg=True, name="delta^Q_{i,t,-}")
+    delta_P = cp.Variable((n_nodes, n_time), name="delta^P_{i,t}")
+    delta_Q = cp.Variable((n_nodes, n_time), name="delta^Q_{i,t}")
 
     P_ch = cp.Variable((n_nodes, n_time), nonneg=True, name="P^{ch}_{j,t}")
     P_dis = cp.Variable((n_nodes, n_time), nonneg=True, name="P^{dis}_{j,t}")
@@ -124,8 +126,8 @@ def formulate_vpp_problem(
     P_batt_max = cp.Variable(n_nodes, nonneg=True, name="P^{batt}_{j,max}")
     e_batt_max_by_node = cp.Variable(n_nodes, nonneg=True, name="e^{batt}_{j,max}")
 
-    delta_P = delta_P_pos - delta_P_neg
-    delta_Q = delta_Q_pos - delta_Q_neg
+    # delta_P = delta_P_pos - delta_P_neg
+    # delta_Q = delta_Q_pos - delta_Q_neg
 
     constraints: Dict[str, List[cp.Constraint]] = {}
 
@@ -288,8 +290,8 @@ def formulate_vpp_problem(
     constraints["no_battery_at_root"] = [e_batt_max_by_node[root_node_idx] == 0.0]
 
     generation_cost = cp.sum(cp.multiply(c, s))
-    imbalance_cost = mu_P * cp.sum(delta_P_pos + delta_P_neg) + mu_Q * cp.sum(
-        delta_Q_pos + delta_Q_neg
+    imbalance_cost = mu_P * cp.sum(delta_P) + mu_Q * cp.sum(
+        delta_Q
     )
     objective = cp.Minimize(generation_cost + imbalance_cost)
 
@@ -306,10 +308,10 @@ def formulate_vpp_problem(
         "V_{i,t}": V,
         "delta^P_{i,t}": delta_P,
         "delta^Q_{i,t}": delta_Q,
-        "delta^P_{i,t,+}": delta_P_pos,
-        "delta^P_{i,t,-}": delta_P_neg,
-        "delta^Q_{i,t,+}": delta_Q_pos,
-        "delta^Q_{i,t,-}": delta_Q_neg,
+        # "delta^P_{i,t,+}": delta_P_pos,
+        # "delta^P_{i,t,-}": delta_P_neg,
+        # "delta^Q_{i,t,+}": delta_Q_pos,
+        # "delta^Q_{i,t,-}": delta_Q_neg,
         "P^{ch}_{j,t}": P_ch,
         "P^{dis}_{j,t}": P_dis,
         "P^{batt}_{j,t}": P_batt,
