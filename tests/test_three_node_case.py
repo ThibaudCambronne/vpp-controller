@@ -5,7 +5,7 @@ from vpp_controller.optimization import VPPFormulation, formulate_vpp_problem
 from vpp_controller.runner import DayOptimizationResult, solve_formulation_problem
 
 
-def test_1():
+def test_three_nodes_case():
     """Test case with 3 nodes, 2 edges, and 2 time steps.
     Here, we make a problem where the optimal placement for the battery is on node 2.
     We need to put all of the available capacity there to be able to meet the demand at timestep 2,
@@ -71,6 +71,10 @@ def test_1():
         eta_dis=eta_dis,
         delta_t=1.0,
     )
+
+    T = formulation.dimensions["|T|"]
+    e = result.variables["e_{j,t}"]
+    assert e.shape == (3, T + 1), "Unexpected SOC dimensions for 3-node test case."
 
     # Check that battery is placed at node 2
     P_batt_j_max = result.variables["P^{batt}_{j,max}"]
@@ -161,11 +165,7 @@ def run_test_case_and_solve(
     ):
         assert key in result.variables
 
-    T = formulation.dimensions["|T|"]
-
     e = result.variables["e_{j,t}"]
-    assert e.shape == (3, T + 1), "Unexpected SOC dimensions for 3-node test case."
-
     assert np.isclose(e[0, :], 0.0).all(), (
         "Battery SOC at node 0 should be zero in 3-node test case."
     )
