@@ -37,7 +37,8 @@ def formulate_vpp_problem(
     delta_t: float,
     e_0: float,
     e_batt_max: float,
-    mu_therm: float,
+    mu_P: float,
+    mu_Q: float,
     v_0: float = 1.0,
 ) -> VPPFormulation:
     """
@@ -212,7 +213,6 @@ def formulate_vpp_problem(
     constraints["reactive_power_balance"] = []
     constraints["voltage_balance"] = [V[root_node_idx, :] == v_0**2]
     constraints["thermal_limits"] = []
-    constraints["thermal_slack_root"] = [delta_therm[root_node_idx, :] == 0.0]
     constraints["current_relation_relaxed"] = []
     constraints["delta_limits"] = []
 
@@ -248,9 +248,9 @@ def formulate_vpp_problem(
 
         # Elastic demand limits: curtailment only (delta_P in [-l_P, 0])
         constraints["delta_limits"].append(delta_P[j_idx, :] >= -l_P[j_idx, :])
-        constraints["delta_limits"].append(delta_P[j_idx, :] <= 0.0)
+        constraints["delta_limits"].append(delta_P[j_idx, :] <= P_dis[j_idx, :])
         constraints["delta_limits"].append(delta_Q[j_idx, :] >= -l_Q[j_idx, :])
-        constraints["delta_limits"].append(delta_Q[j_idx, :] <= 0.0)
+        constraints["delta_limits"].append(delta_Q[j_idx, :] <= 0)
 
         # Active power balance (1)
         constraints["active_power_balance"].append(
