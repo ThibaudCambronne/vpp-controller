@@ -614,7 +614,6 @@ def main(date_string):
     demand_df["hour"] = pd.to_datetime(demand_df["timestamp"]).dt.hour
     demand_df = demand_df[["node", "hour", "l_P", "l_Q"]]
 
-    # import pdb;pdb.set_trace()
     results_list = []
     for file in json_files:
         results_dict = get_results_dict(file)
@@ -629,12 +628,19 @@ def main(date_string):
         results_dict, OUT_PATH, 's_{i,t}', dict_key="variables", filter_small_nodes=False
         )
         results_list.append(results_dict)
-    interestNode = 9
-    plot_node_dispatch_by_capacity(results_list, interestNode, OUT_PATH)
-    plot_node_slack_by_capacity(results_list, interestNode, OUT_PATH, normalize=False)
-    interestNode = 1
-    plot_node_dispatch_by_capacity(results_list, interestNode, OUT_PATH)
-    plot_node_slack_by_capacity(results_list, interestNode, OUT_PATH, normalize=False)
+    
+    for interestNode in range(14):#interestNode = 9
+        try:
+            plot_node_dispatch_by_capacity(results_list, interestNode, OUT_PATH)
+        except:
+            pass
+        try:
+            plot_node_slack_by_capacity(results_list, interestNode, OUT_PATH, normalize=False)
+        except:
+            pass
+    # interestNode = 1
+    # plot_node_dispatch_by_capacity(results_list, interestNode, OUT_PATH)
+    # plot_node_slack_by_capacity(results_list, interestNode, OUT_PATH, normalize=False)
     
     plot_objective_vs_capacity(results_list,OUT_PATH)
     plot_capacity_allocation(results_list,OUT_PATH)
