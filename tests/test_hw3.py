@@ -1,18 +1,18 @@
 import numpy as np
 import pandas as pd
 
+from tests.test_three_node_case import run_test_case_and_solve
 from vpp_controller.optimization import formulate_vpp_problem
-from vpp_controller.paths import DATA_DIR
+from vpp_controller.paths import DATA_NETWORKS_DIR
 from vpp_controller.runner import (
     build_model_inputs,
-    solve_formulation_problem,
 )
 
 
 def test_hw3():
     """Test the optimization to see if we get the same as hw 3 when we run 1 timestep with no battery."""
 
-    topology_df = pd.read_csv(DATA_DIR / "homework3bus.csv")
+    topology_df = pd.read_csv(DATA_NETWORKS_DIR / "homework3bus.csv")
     print(topology_df.columns)
 
     # price series is just the price profile for node 0
@@ -37,15 +37,14 @@ def test_hw3():
     model_inputs["c"][:, 0] = topology_df["c"]
 
     formulation = formulate_vpp_problem(**model_inputs)
-    solve_formulation_problem(formulation.problem)
+    result = run_test_case_and_solve(
+        formulation, eta_ch=0.95, eta_dis=0.95, delta_t=1.0
+    )
 
-    variables = {
-        name: np.array(var.value) if hasattr(var, "value") else np.array(var)
-        for name, var in formulation.variables.items()
-    }
+    variables = result.variables
 
     # Check results against expected values from hw 3
-    assert np.isclose(formulation.problem.value, 299.79)
+    assert np.isclose(result.objective_value, 299.79)
 
     assert np.isclose(
         variables["p_{i,t}"][:, 0],

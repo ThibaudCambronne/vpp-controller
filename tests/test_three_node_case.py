@@ -5,7 +5,7 @@ from vpp_controller.optimization import VPPFormulation, formulate_vpp_problem
 from vpp_controller.runner import DayOptimizationResult, solve_formulation_problem
 
 
-def test_1():
+def test_three_nodes_case():
     """Test case with 3 nodes, 2 edges, and 2 time steps.
     Here, we make a problem where the optimal placement for the battery is on node 2.
     We need to put all of the available capacity there to be able to meet the demand at timestep 2,
@@ -39,6 +39,7 @@ def test_1():
 
     eta_ch = 0.95
     eta_dis = 0.95
+    mu_therm = 200.0
 
     formulation = formulate_vpp_problem(
         N=n_set,
@@ -72,6 +73,10 @@ def test_1():
         delta_t=1.0,
     )
 
+    T = formulation.dimensions["|T|"]
+    e = result.variables["e_{j,t}"]
+    assert e.shape == (3, T + 1), "Unexpected SOC dimensions for 3-node test case."
+
     # Check that battery is placed at node 2
     P_batt_j_max = result.variables["P^{batt}_{j,max}"]
     assert P_batt_j_max[2] > 0.45, (
@@ -95,6 +100,11 @@ def test_1():
     assert s[0, 0] > 1.7, "Generation at node 0 should be around 1.5 MW at t=0."
     assert s[0, 1] > 0.6, "Generation at node 0 should be around 1 MW at t=1."
     assert np.all(s[1:, :] < 1e-5), "There should be no generation at nodes 1 and 2."
+
+    thermal_slack = result.variables["delta_therm_{i,t}"]
+    assert thermal_slack[2, 1] > 1e-3, (
+        "Thermal overload slack should appear on the congested line feeding node 2."
+    )
 
     # assert that there is congestion on the second edge at t=1,
     # because we need to charge the battery there to meet the demand at t=2.
@@ -146,8 +156,7 @@ def run_test_case_and_solve(
         "Q_{ij,t}",
         "L_{ij,t}",
         "V_{i,t}",
-        "delta^P_{i,t}",
-        "delta^Q_{i,t}",
+        "delta_therm_{i,t}",
         "P^{ch}_{j,t}",
         "P^{dis}_{j,t}",
         "P^{batt}_{j,t}",
@@ -159,11 +168,7 @@ def run_test_case_and_solve(
     ):
         assert key in result.variables
 
-    T = formulation.dimensions["|T|"]
-
     e = result.variables["e_{j,t}"]
-    assert e.shape == (3, T + 1), "Unexpected SOC dimensions for 3-node test case."
-
     assert np.isclose(e[0, :], 0.0).all(), (
         "Battery SOC at node 0 should be zero in 3-node test case."
     )
@@ -175,6 +180,11 @@ def run_test_case_and_solve(
     P_dis = result.variables["P^{dis}_{j,t}"]
     assert np.min(P_ch) >= -1e-7, "Charging power must be nonnegative."
     assert np.min(P_dis) >= -1e-7, "Discharging power must be nonnegative."
+
+    # Make sure that we don't have simultaneous charging and discharging for the battery at any time step
+    assert np.all(np.abs(P_ch * P_dis) <= 1e-3), (
+        "Simultaneous charging and discharging is not allowed."
+    )
 
     soc_residual = (
         e[:, 1:] - e[:, :-1] - (eta_ch * P_ch - (1.0 / eta_dis) * P_dis) * delta_t
