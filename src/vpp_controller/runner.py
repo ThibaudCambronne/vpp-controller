@@ -145,11 +145,12 @@ def build_model_inputs(
         "v_max": v_max,
         "eta_ch": 0.95,
         "eta_dis": 0.95,
-        "alpha": 2.0,
+        "alpha": 1.0,
         "delta_t": 1.0,
         "e_0": 0.0,
         "e_batt_max": float(total_battery_capacity),
-        "mu_therm": 200.0,
+        "mu_P": -39.0,
+        "mu_Q": 0.0,
         "v_0": 1.0,
     }
 
@@ -214,7 +215,7 @@ def solve_formulation_problem(problem: cp.Problem) -> None:
 
     for solver_name in preferred:
         if solver_name in installed:
-            problem.solve(solver=solver_name, verbose=False)
+            problem.solve(solver=solver_name, verbose=True)
             return
 
     installed_list = ", ".join(sorted(installed)) if installed else "none"

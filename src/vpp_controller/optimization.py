@@ -43,9 +43,13 @@ def formulate_vpp_problem(
     """
     Build the convex OPF + battery placement model with LaTeX-aligned symbols.
 
-    Variable keys in the returned dictionary intentionally match paper notation:
-    - p_{i,t}, q_{i,t}, s_{i,t}, P_{ij,t}, Q_{ij,t}, L_{ij,t}, V_{i,t}
-    - delta_therm_{i,t} (thermal overload slack mapped to the feeder line feeding node i)
+    Branch-flow variables P, Q, L are indexed by (edge, time) — a 2D layout —
+    to avoid CVXPY canonicalization bugs that occur with 3-D (node x node x time)
+    variables.  All other variable keys are unchanged from the paper notation:
+
+    - p_{i,t}, q_{i,t}, s_{i,t}, V_{i,t}
+    - P_{ij,t}, Q_{ij,t}, L_{ij,t}   <- shape (n_edges, n_time)
+    - delta^P_{i,t}, delta^Q_{i,t}
     - P^{ch}_{j,t}, P^{dis}_{j,t}, P^{batt}_{j,t}, Q^{batt}_{j,t}, S^{batt}_{j,t}, e_{j,t}
     - P^{batt}_{j,max}, e^{batt}_{j,max}
     """
@@ -76,18 +80,15 @@ def formulate_vpp_problem(
     )
 
     node_to_idx = {node: idx for idx, node in enumerate(node_ids)}
-    edge_to_idx = {(i, j): idx for idx, (i, j) in enumerate(edge_ids)}
 
-    # construct adjency matrix
-    A = np.zeros((n_nodes, n_nodes))
-    for i in node_ids:
-        A[node_to_idx[rho[i]], node_to_idx[i]] = 1
-    A[0, 0] = 0
+    # For each edge e=(i,j): index of the from-node (i) in node_ids ordering.
+    edge_from_node_idx: List[int] = [node_to_idx[i] for (i, _) in edge_ids]
 
-    children_by_node: Dict[int, List[int]] = {node: [] for node in node_ids}
+    # Outgoing edge indices for each node, and incoming edge index for each non-root node.
+    outgoing_edges_by_node: Dict[int, List[int]] = {node: [] for node in node_ids}
     parent_edge_by_node: Dict[int, int] = {}
     for edge_idx, (i, j) in enumerate(edge_ids):
-        children_by_node[i].append(j)
+        outgoing_edges_by_node[i].append(edge_idx)
         parent_edge_by_node[j] = edge_idx
 
     root_candidates = [node for node in node_ids if node not in parent_edge_by_node]
@@ -97,18 +98,23 @@ def formulate_vpp_problem(
     root_node_idx = node_to_idx[root_node]
     assert root_node_idx == 0, "Root node must be the first node."
     assert rho[root_node] == 0, "Root node must have rho value of 0."
-    assert A[root_node_idx, root_node_idx] == 0, "Root node cannot have a self-loop."
 
+    # -------------------------------------------------------------------------
+    # Decision variables
+    # -------------------------------------------------------------------------
     p = cp.Variable((n_nodes, n_time), nonneg=True, name="p_{i,t}")  # (5)
     q = cp.Variable((n_nodes, n_time), nonneg=True, name="q_{i,t}")  # (5)
     s = cp.Variable((n_nodes, n_time), nonneg=True, name="s_{i,t}")
 
-    P = cp.Variable((n_nodes, n_nodes, n_time), name="P_{ij,t}")
-    Q = cp.Variable((n_nodes, n_nodes, n_time), name="Q_{ij,t}")
-    L = cp.Variable((n_nodes, n_nodes, n_time), nonneg=True, name="L_{ij,t}")
+    # Branch-flow variables: 2D (edge x time) to avoid CVXPY 3-D indexing bugs.
+    P_e = cp.Variable((n_edges, n_time), name="P_{ij,t}")
+    Q_e = cp.Variable((n_edges, n_time), name="Q_{ij,t}")
+    L_e = cp.Variable((n_edges, n_time), nonneg=True, name="L_{ij,t}")
+
     V = cp.Variable((n_nodes, n_time), name="V_{i,t}")
 
-    delta_therm = cp.Variable((n_nodes, n_time), nonneg=True, name="delta_therm_{i,t}")
+    delta_P = cp.Variable((n_nodes, n_time), name="delta^P_{i,t}")
+    delta_Q = cp.Variable((n_nodes, n_time), name="delta^Q_{i,t}")
 
     P_ch = cp.Variable((n_nodes, n_time), nonneg=True, name="P^{ch}_{j,t}")
     P_dis = cp.Variable((n_nodes, n_time), nonneg=True, name="P^{dis}_{j,t}")
@@ -120,6 +126,9 @@ def formulate_vpp_problem(
     P_batt_max = cp.Variable(n_nodes, nonneg=True, name="P^{batt}_{j,max}")
     e_batt_max_by_node = cp.Variable(n_nodes, nonneg=True, name="e^{batt}_{j,max}")
 
+    # -------------------------------------------------------------------------
+    # Node-level constraints (voltage bounds, generator limits, battery)
+    # -------------------------------------------------------------------------
     constraints: Dict[str, List[cp.Constraint]] = {}
 
     constraints["voltage_bounds"] = []
@@ -132,9 +141,9 @@ def formulate_vpp_problem(
     constraints["battery_energy_limits"] = []
     constraints["battery_cycle"] = []
     constraints["battery_energy_dynamics"] = []
-    constraints["battery_no_reactive_power"] = []
+
     for node in node_ids:
-        j_idx = node_to_idx[node]  # node index in 0-based ordering
+        j_idx = node_to_idx[node]
         for t_idx in range(n_time):
             # Voltage bounds at each node and time step (8)
             constraints["voltage_bounds"].append(V[j_idx, t_idx] >= v_min**2)
@@ -157,10 +166,6 @@ def formulate_vpp_problem(
                 <= S_batt[j_idx, t_idx]
             )
 
-            # TODO: test
-            # Battery inverter apparent power definition, relaxed (13)
-            # constraints["battery_no_reactive_power"].append(Q_batt[j_idx, t_idx] == 0.0)
-
             # Battery inverter capacity (14)
             constraints["battery_inverter_capacity"].append(
                 S_batt[j_idx, t_idx] <= P_batt_max[j_idx]
@@ -181,7 +186,7 @@ def formulate_vpp_problem(
                 e[j_idx, t_idx] <= e_batt_max_by_node[j_idx]
             )
 
-        # Battery energy limits, at time T (11)
+        # Battery energy limits at time T (11)
         constraints["battery_energy_limits"].append(e[j_idx, n_time] >= 0.0)
         constraints["battery_energy_limits"].append(
             e[j_idx, n_time] <= e_batt_max_by_node[j_idx]
@@ -200,69 +205,96 @@ def formulate_vpp_problem(
                 * delta_t
             )
 
-    constraints["active_power_balance"] = [P[0, 0, :] == 0.0]
-    constraints["reactive_power_balance"] = [Q[0, 0, :] == 0.0]
-    constraints["voltage_balance"] = [V[0, :] == v_0**2]
+    # -------------------------------------------------------------------------
+    # Network flow constraints (edge-indexed branch variables)
+    # -------------------------------------------------------------------------
+    constraints["active_power_balance"] = []
+    constraints["reactive_power_balance"] = []
+    constraints["voltage_balance"] = [V[root_node_idx, :] == v_0**2]
     constraints["thermal_limits"] = []
     constraints["thermal_slack_root"] = [delta_therm[root_node_idx, :] == 0.0]
     constraints["current_relation_relaxed"] = []
+    constraints["delta_limits"] = []
+
+    # Root node: generation equals total outgoing flow (no incoming edge).
+    root_out_P: Any = np.zeros(n_time)
+    root_out_Q: Any = np.zeros(n_time)
+    for e_idx in outgoing_edges_by_node[root_node]:
+        root_out_P = root_out_P + P_e[e_idx, :]
+        root_out_Q = root_out_Q + Q_e[e_idx, :]
+    constraints["active_power_balance"].append(p[root_node_idx, :] == root_out_P)
+    constraints["reactive_power_balance"].append(q[root_node_idx, :] == root_out_Q)
+    constraints["delta_limits"].append(delta_P[root_node_idx, :] == 0.0)
+    constraints["delta_limits"].append(delta_Q[root_node_idx, :] == 0.0)
+
+    # Non-root nodes: one incoming edge, zero or more outgoing edges.
     for node in node_ids:
         j_idx = node_to_idx[node]
-        i_idx = node_to_idx[rho[node]]
-
         if j_idx == root_node_idx:
-            rij = 0
-            xij = 0
-            I_max_ij = 0
-        else:
-            edge_idx = edge_to_idx[(rho[node], node)]
-            rij = r[edge_idx]
-            xij = x[edge_idx]
-            I_max_ij = I_max[edge_idx]
+            continue
 
-        # Active power balance constraint (1)
+        e_in = parent_edge_by_node[node]
+        i_idx = edge_from_node_idx[e_in]  # index of parent node
+        rij = r[e_in]
+        xij = x[e_in]
+        I_max_ij = I_max[e_in]
+
+        # Sum of flows from node j to its children (zero for leaf nodes).
+        children_P: Any = np.zeros(n_time)
+        children_Q: Any = np.zeros(n_time)
+        for e_out in outgoing_edges_by_node[node]:
+            children_P = children_P + P_e[e_out, :]
+            children_Q = children_Q + Q_e[e_out, :]
+
+        # Elastic demand limits: curtailment only (delta_P in [-l_P, 0])
+        constraints["delta_limits"].append(delta_P[j_idx, :] >= -l_P[j_idx, :])
+        constraints["delta_limits"].append(delta_P[j_idx, :] <= 0.0)
+        constraints["delta_limits"].append(delta_Q[j_idx, :] >= -l_Q[j_idx, :])
+        constraints["delta_limits"].append(delta_Q[j_idx, :] <= 0.0)
+
+        # Active power balance (1)
         constraints["active_power_balance"].append(
-            P[i_idx, j_idx, :]
+            P_e[e_in, :]
             == (
                 l_P[j_idx, :]
                 - p[j_idx, :]
                 - P_batt[j_idx, :]
-                + rij * L[i_idx, j_idx, :]
-                + A[j_idx, :] @ P[j_idx, :, :]
+                + rij * L_e[e_in, :]
+                + children_P
+                + delta_P[j_idx, :]
             )
         )
 
-        # Reactive power balance constraint (2)
+        # Reactive power balance (2)
         constraints["reactive_power_balance"].append(
-            Q[i_idx, j_idx, :]
+            Q_e[e_in, :]
             == (
                 l_Q[j_idx, :]
                 - q[j_idx, :]
                 - Q_batt[j_idx, :]
-                + xij * L[i_idx, j_idx, :]
-                + A[j_idx, :] @ Q[j_idx, :, :]
+                + xij * L_e[e_in, :]
+                + children_Q
+                + delta_Q[j_idx, :]
             )
         )
 
-        # Voltage balance constraint (3)
+        # Voltage balance (3)
         constraints["voltage_balance"].append(
             V[j_idx, :]
             == V[i_idx, :]
-            + (rij**2 + xij**2) * L[i_idx, j_idx, :]
-            - 2.0 * (rij * P[i_idx, j_idx, :] + xij * Q[i_idx, j_idx, :])
+            + (rij**2 + xij**2) * L_e[e_in, :]
+            - 2.0 * (rij * P_e[e_in, :] + xij * Q_e[e_in, :])
         )
 
-        # Thermal limit constraint (9), relaxed by the node slack on the incoming line.
-        constraints["thermal_limits"].append(
-            L[i_idx, j_idx, :] <= I_max_ij**2 + delta_therm[j_idx, :]
-        )
+        # Thermal limit (9) — one constraint per edge (indexed by edge order in E)
+        constraints["thermal_limits"].append(L_e[e_in, :] <= 16*I_max_ij**2)
 
         # Current relation, relaxed (4)
         for t_idx in range(n_time):
             constraints["current_relation_relaxed"].append(
-                L[i_idx, j_idx, t_idx]
+                L_e[e_in, t_idx]
                 >= cp.quad_over_lin(
-                    cp.hstack([P[i_idx, j_idx, t_idx], Q[i_idx, j_idx, t_idx]]),
+                    cp.hstack([P_e[e_in, t_idx], Q_e[e_in, t_idx]]),
                     V[i_idx, t_idx],
                 )
             )
@@ -281,22 +313,28 @@ def formulate_vpp_problem(
     # No battery at root node
     constraints["no_battery_at_root"] = [e_batt_max_by_node[root_node_idx] == 0.0]
 
-    generation_cost = cp.sum(cp.multiply(c, s))
-    thermal_slack_cost = mu_therm * cp.sum(delta_therm)
-    objective = cp.Minimize(generation_cost + thermal_slack_cost)
+    # -------------------------------------------------------------------------
+    # Objective
+    # -------------------------------------------------------------------------
+    generation_cost = cp.sum(cp.multiply(c, p))
+    imbalance_cost = mu_P * cp.sum(delta_P) + mu_Q * cp.sum(delta_Q)
+    objective = cp.Minimize(generation_cost + imbalance_cost)
 
     all_constraints = [con for group in constraints.values() for con in group]
     problem = cp.Problem(objective, all_constraints)
 
+    # P_{ij,t}, Q_{ij,t}, L_{ij,t} are now shape (n_edges, n_time) rather than
+    # (n_nodes, n_nodes, n_time).  All other shapes are unchanged.
     variables: Dict[str, Any] = {
         "p_{i,t}": p,
         "q_{i,t}": q,
         "s_{i,t}": s,
-        "P_{ij,t}": P,
-        "Q_{ij,t}": Q,
-        "L_{ij,t}": L,
+        "P_{ij,t}": P_e,
+        "Q_{ij,t}": Q_e,
+        "L_{ij,t}": L_e,
         "V_{i,t}": V,
-        "delta_therm_{i,t}": delta_therm,
+        "delta^P_{i,t}": delta_P,
+        "delta^Q_{i,t}": delta_Q,
         "P^{ch}_{j,t}": P_ch,
         "P^{dis}_{j,t}": P_dis,
         "P^{batt}_{j,t}": P_batt,

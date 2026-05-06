@@ -8,7 +8,10 @@
       "Bash(python _patch3.py)",
       "Bash(python _make_predictor.py)",
       "Bash(python _fix_feat_loop.py)",
-      "Bash(python _fix_timeline.py)"
+      "Bash(python _fix_timeline.py)",
+      "Bash(python -m pytest tests/test_three_node_case.py -v)",
+      "Bash(python -m pytest tests/test_three_node_case.py -v -s --tb=short)",
+      "Bash(python -m pytest -v)"
     ],
     "additionalDirectories": [
       "c:\\Users\\cloit\\Documents\\Grad School\\Second Semester\\Carbon Containment Lab"
