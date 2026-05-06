@@ -33,7 +33,7 @@ def main() -> None:
     # print(demand_df)
 
     # create list from 0 to 20 iterating by 5
-    batt_caps = list(np.arange(8, 50, 2))
+    batt_caps = list(np.arange(24, 50, 2))
 
     for batt_cap in batt_caps:
         # print("\n" + "=" * 50)
