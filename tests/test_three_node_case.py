@@ -60,8 +60,8 @@ def test_1():
         delta_t=1.0,
         e_0=0.0,
         e_batt_max=max_energy_capacity,
-        mu_P=200.0,
-        mu_Q=80.0,
+        mu_P=-200.0,
+        mu_Q=-80.0,
         v_0=1.0,
     )
 
@@ -97,8 +97,10 @@ def test_1():
     assert np.all(s[1:, :] < 1e-5), "There should be no generation at nodes 1 and 2."
 
     # assert that there is congestion on the second edge at t=1,
-    # because we need to charge the battery there to meet the demand at t=2
-    assert (result.duals["thermal_limits"][2] >= 1).all(), (
+    # because we need to charge the battery there to meet the demand at t=2.
+    # thermal_limits is edge-indexed (one entry per edge in E order):
+    #   index 0 -> edge (0,1),  index 1 -> edge (1,2)
+    assert (result.duals["thermal_limits"][1] >= 1).all(), (
         "There should be congestion on the line between node 1 and node 2 at t=1."
     )
 

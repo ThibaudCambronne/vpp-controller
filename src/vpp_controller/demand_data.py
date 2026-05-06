@@ -27,7 +27,7 @@ def load_demand_data(file_path: str | Path | None = None) -> pd.DataFrame:
     Returns a DataFrame with the columns needed by the demand builders.
     """
     csv_path = Path(file_path) if file_path is not None else _default_demand_file()
-    df = pd.read_csv(csv_path, sep=";")
+    df = pd.read_csv(csv_path)
     df["UTC time"] = pd.to_datetime(df["UTC time"], format="mixed", dayfirst=True)
     df = df[df["UTC time"].dt.year == 2025]
 

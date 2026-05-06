@@ -1,6 +1,6 @@
 import sys
 from pathlib import Path
-
+import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.patches import Patch
@@ -13,10 +13,11 @@ if str(SRC) not in sys.path:
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 # from src.vpp_controller.demand_data import create_all_nodes_demand
-from src.vpp_controller.paths import FIGURE_PATH, OUTPUT_DIR
+from src.vpp_controller.paths import FIGURE_PATH, OUTPUT_DIR,DATA_PRICES_DIR, DATA_NETWORKS_DIR
 
 # from src.vpp_controller.runner import run_day_optimization
 from vpp_controller.results_format import load_day_optimization_result
+from src.vpp_controller.demand_data import create_all_nodes_demand
 
 
 def create_output_folder(date_str):
@@ -68,7 +69,7 @@ def plot_objective_vs_capacity(results_list, OUT_PATH):
     return
 
 
-def plot_node_profit_by_capacity(results_list, OUT_PATH):
+def plot_node_profit_by_capacity(results_list,price_df, OUT_PATH):
     """Grouped bar chart: per-node profit for each capacity scenario.
 
     Profit at each node = dot product of P^{batt}_{j,t}[node] with p_{i,t}[0]
@@ -85,11 +86,11 @@ def plot_node_profit_by_capacity(results_list, OUT_PATH):
 
     bar_width = 0.8 / n_scenarios
     fig, ax = plt.subplots(figsize=(max(10, n_nodes * 1.5), 6))
-
+    prices = np.array(price_df['$/MW'].squeeze(), dtype=float)
     for i, (r, total) in enumerate(zip(sorted_results, total_caps)):
-        prices = np.array(r['variables']['p_{i,t}'][0], dtype=float)
+        
         profits = [
-            -1*float(np.dot(np.array(r['variables']['P^{batt}_{j,t}'][node], dtype=float), prices))
+            float(np.dot(np.array(r['variables']['P^{batt}_{j,t}'][node], dtype=float), prices))
             for node in range(n_nodes)
         ]
         offsets = nodes + (i - n_scenarios / 2 + 0.5) * bar_width
@@ -361,7 +362,6 @@ def plot_generic_value(
         kept_nodes = list(range(n_nodes))
 
     val_array = val_array[kept_nodes, :]
-
     max_val = np.abs(val_array).max()
     if max_val > 0:
         val_array[np.abs(val_array) < 0.001] = 0.0
@@ -602,21 +602,43 @@ def main(date_string):
     OUT_PATH = FIGURE_PATH / date_string
     create_output_folder(OUT_PATH)
     json_files = find_files_by_date(date_string)
+    topology_df = pd.read_csv(DATA_NETWORKS_DIR / "homework3bus no gen.csv")
+
+    price_df = pd.read_csv(
+        DATA_PRICES_DIR / "pricedf_0096WD_7_N001_spring_2025_04_10.csv"#"pricedf_0096WD_7_N001_fall_2025_10_10.csv"
+    )
+    price_df = price_df.sort_values(by="OPR_HR").reset_index(drop=True)
+
+    demand_df = create_all_nodes_demand(topology_df, "fall", factor=0.7)
+    demand_df = demand_df.rename(columns={"P_demand": "l_P", "Q_demand": "l_Q"})
+    demand_df["hour"] = pd.to_datetime(demand_df["timestamp"]).dt.hour
+    demand_df = demand_df[["node", "hour", "l_P", "l_Q"]]
+
+    # import pdb;pdb.set_trace()
     results_list = []
-    
     for file in json_files:
         results_dict = get_results_dict(file)
         plot_battery_dispatch_3d(results_dict,OUT_PATH,normalize=False,filter_small_nodes=False)
-        plot_transmission_congestion(results_dict,OUT_PATH,filter_small_nodes=True)
+        try:
+            plot_transmission_congestion(results_dict,OUT_PATH,filter_small_nodes=True)
+        except Exception as e:
+            print(f"Error plotting transmission congestion: {e}")
+            print(file)
         plot_slack_3d(results_dict, OUT_PATH, normalize=False, filter_small_nodes=False)
+        plot_generic_value(
+        results_dict, OUT_PATH, 's_{i,t}', dict_key="variables", filter_small_nodes=False
+        )
         results_list.append(results_dict)
     interestNode = 9
+    plot_node_dispatch_by_capacity(results_list, interestNode, OUT_PATH)
+    plot_node_slack_by_capacity(results_list, interestNode, OUT_PATH, normalize=False)
+    interestNode = 1
     plot_node_dispatch_by_capacity(results_list, interestNode, OUT_PATH)
     plot_node_slack_by_capacity(results_list, interestNode, OUT_PATH, normalize=False)
     
     plot_objective_vs_capacity(results_list,OUT_PATH)
     plot_capacity_allocation(results_list,OUT_PATH)
-    plot_node_profit_by_capacity(results_list, OUT_PATH)
+    plot_node_profit_by_capacity(results_list,price_df, OUT_PATH)
     return
 
 

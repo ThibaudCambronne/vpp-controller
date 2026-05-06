@@ -17,26 +17,26 @@ opVersion = 1
 
 def main() -> None:
     topology_df = pd.read_csv(DATA_NETWORKS_DIR / "homework3bus no gen.csv")
-    print(topology_df)
+    # print(topology_df)
 
     price_df = pd.read_csv(
-        DATA_PRICES_DIR / "pricedf_0096WD_7_N001_fall_2025_10_10.csv"
+        DATA_PRICES_DIR / "pricedf_0096WD_7_N001_spring_2025_04_10.csv"#"pricedf_0096WD_7_N001_fall_2025_10_10.csv"
     )
     price_df = price_df.sort_values(by="OPR_HR").reset_index(drop=True)
-    print(price_df)
+    # print(price_df)
 
     demand_df = create_all_nodes_demand(topology_df, "fall", factor=0.7)
     demand_df = demand_df.rename(columns={"P_demand": "l_P", "Q_demand": "l_Q"})
     demand_df["hour"] = pd.to_datetime(demand_df["timestamp"]).dt.hour
     demand_df = demand_df[["node", "hour", "l_P", "l_Q"]]
 
-    print(demand_df)
+    # print(demand_df)
 
     # create list from 0 to 20 iterating by 5
-    batt_caps = list(np.arange(0, 21, 1))
+    batt_caps = list(np.arange(8, 50, 2))
 
     for batt_cap in batt_caps:
-        print("\n" + "=" * 50)
+        # print("\n" + "=" * 50)
         print(f"Running optimization with battery capacity: {batt_cap} kWh")
 
         batt_cap = float(batt_cap)
@@ -48,8 +48,8 @@ def main() -> None:
             total_battery_capacity=batt_cap,
         )
 
-        for key, value in dayOptResults.variables.items():
-            print(f" {key}: {value.round(1)}")
+        # for key, value in dayOptResults.variables.items():
+        #     print(f" {key}: {value.round(1)}")
 
         metadata_path, variables_path = save_day_optimization_result(
             dayOptResults, batt_cap, opVersion
