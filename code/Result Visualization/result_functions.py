@@ -104,6 +104,7 @@ def plot_node_profit_by_capacity(results_list,price_df, OUT_PATH):
     ax.set_xticklabels([str(i) for i in range(n_nodes)])
     ax.legend(title='Total Capacity (MWh)', bbox_to_anchor=(1.05, 1), loc='upper left')
     ax.grid(axis='y', linestyle='--', alpha=0.5)
+    ax.set_yscale('log')
     plt.tight_layout()
     plt.savefig(OUT_PATH / 'node_profit_by_capacity.png', dpi=150, bbox_inches='tight')
     # plt.show()
@@ -602,17 +603,17 @@ def main(date_string):
     OUT_PATH = FIGURE_PATH / date_string
     create_output_folder(OUT_PATH)
     json_files = find_files_by_date(date_string)
-    topology_df = pd.read_csv(DATA_NETWORKS_DIR / "homework3bus no gen.csv")
+    # topology_df = pd.read_csv(DATA_NETWORKS_DIR / "homework3bus no gen.csv")
 
     price_df = pd.read_csv(
         DATA_PRICES_DIR / "pricedf_0096WD_7_N001_spring_2025_04_10.csv"#"pricedf_0096WD_7_N001_fall_2025_10_10.csv"
     )
     price_df = price_df.sort_values(by="OPR_HR").reset_index(drop=True)
 
-    demand_df = create_all_nodes_demand(topology_df, "fall", factor=0.7)
-    demand_df = demand_df.rename(columns={"P_demand": "l_P", "Q_demand": "l_Q"})
-    demand_df["hour"] = pd.to_datetime(demand_df["timestamp"]).dt.hour
-    demand_df = demand_df[["node", "hour", "l_P", "l_Q"]]
+    # demand_df = create_all_nodes_demand(topology_df, "fall", factor=0.7)
+    # demand_df = demand_df.rename(columns={"P_demand": "l_P", "Q_demand": "l_Q"})
+    # demand_df["hour"] = pd.to_datetime(demand_df["timestamp"]).dt.hour
+    # demand_df = demand_df[["node", "hour", "l_P", "l_Q"]]
 
     results_list = []
     for file in json_files:
@@ -638,9 +639,6 @@ def main(date_string):
             plot_node_slack_by_capacity(results_list, interestNode, OUT_PATH, normalize=False)
         except:
             pass
-    # interestNode = 1
-    # plot_node_dispatch_by_capacity(results_list, interestNode, OUT_PATH)
-    # plot_node_slack_by_capacity(results_list, interestNode, OUT_PATH, normalize=False)
     
     plot_objective_vs_capacity(results_list,OUT_PATH)
     plot_capacity_allocation(results_list,OUT_PATH)
@@ -663,5 +661,5 @@ def find_files_by_date(date_str):
 
 
 if __name__ == "__main__":
-    date_string = "battCap"
+    date_string = "v_4"
     main(date_string)

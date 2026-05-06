@@ -12,7 +12,7 @@ from src.vpp_controller.paths import DATA_NETWORKS_DIR, DATA_PRICES_DIR
 from src.vpp_controller.results_format import save_day_optimization_result
 from src.vpp_controller.runner import run_day_optimization
 
-opVersion = 1
+opVersion = 4
 
 
 def main() -> None:
@@ -20,8 +20,8 @@ def main() -> None:
     # print(topology_df)
 
     price_df = pd.read_csv(
-        DATA_PRICES_DIR / "pricedf_0096WD_7_N001_spring_2025_04_10.csv"#"pricedf_0096WD_7_N001_fall_2025_10_10.csv"
-    )
+        DATA_PRICES_DIR / "pricedf_0096WD_7_N001_winter_2025_01_10.csv"#"pricedf_0096WD_7_N001_fall_2025_10_10.csv"
+    )#pricedf_0096WD_7_N001_summer_2025_07_10#pricedf_0096WD_7_N001_winter_2025_01_10
     price_df = price_df.sort_values(by="OPR_HR").reset_index(drop=True)
     # print(price_df)
 
