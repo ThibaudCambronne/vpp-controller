@@ -214,9 +214,14 @@ def solve_formulation_problem(problem: cp.Problem) -> None:
     installed = set(cp.installed_solvers())
 
     for solver_name in preferred:
-        if solver_name in installed:
-            problem.solve(solver=solver_name, verbose=True)
-            return
+        try:
+
+            if solver_name in installed:
+                problem.solve(solver=solver_name, verbose=False)
+                return
+        except:
+            print(f"Error occurred while solving with {solver_name}.")
+            continue
 
     installed_list = ", ".join(sorted(installed)) if installed else "none"
     raise cp.SolverError(

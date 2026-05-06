@@ -618,6 +618,8 @@ def main(date_string):
     results_list = []
     for file in json_files:
         results_dict = get_results_dict(file)
+        # if results_dict['status'] != 'optimal':
+        #     print(f"File {file} has status {results_dict['status']}")
         plot_battery_dispatch_3d(results_dict,OUT_PATH,normalize=False,filter_small_nodes=False)
         try:
             plot_transmission_congestion(results_dict,OUT_PATH,filter_small_nodes=True)
@@ -661,5 +663,5 @@ def find_files_by_date(date_str):
 
 
 if __name__ == "__main__":
-    date_string = "v_4"
+    date_string = "v_1"
     main(date_string)
