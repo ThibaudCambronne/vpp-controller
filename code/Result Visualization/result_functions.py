@@ -3,6 +3,7 @@ from pathlib import Path
 import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.lines import Line2D
 from matplotlib.patches import Patch
 from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
 
@@ -599,6 +600,105 @@ def plot_slack_3d(results_dict, OUT_PATH, normalize=False, filter_small_nodes=Fa
     return
 
 
+def plot_node_dispatch_and_slack(results_list, node, OUT_PATH, normalize=False):
+    """Combined line chart of dispatch and slack for one node, one line-pair per capacity.
+
+    Dispatch (P^{batt}_{j,t}) is drawn with solid lines; demand slack (delta^P_{i,t})
+    is dashed. Lines of the same color share the same capacity scenario, making the
+    relationship between dispatch and demand adjustment easy to compare.
+
+    Args:
+        results_list: list of results dicts, one per JSON file for a given date.
+        node: integer index of the node to plot.
+        OUT_PATH: folder in which to save the figure.
+        normalize: if True, both series are expressed as % of that node's capacity.
+    """
+    sorted_results = sorted(results_list, key=lambda r: sum(r["variables"]["e^{batt}_{j,max}"]))
+    n_scen = len(sorted_results)
+    colors = [plt.cm.tab10(i / max(n_scen - 1, 1)) for i in range(n_scen)]
+
+    fig, ax = plt.subplots(figsize=(12, 5))
+    cap_handles = []
+
+    for r, color in zip(sorted_results, colors):
+        total_cap = sum(r["variables"]["e^{batt}_{j,max}"])
+        dispatch = np.array(r["variables"]["P^{batt}_{j,t}"][node], dtype=float)
+        slack = np.array(r["variables"]["delta^P_{i,t}"][node], dtype=float)
+
+        if normalize:
+            node_cap = r["variables"]["e^{batt}_{j,max}"][node]
+            if node_cap > 0:
+                dispatch = dispatch / node_cap * 100.0
+                slack = slack / node_cap * 100.0
+
+        hours = range(len(dispatch))
+        ax.plot(hours, dispatch, marker="o", markersize=3, linewidth=1.5, color=color)
+        ax.plot(hours, slack, marker="s", markersize=3, linewidth=1.5, color=color, linestyle="--")
+        cap_handles.append(Line2D([0], [0], color=color, linewidth=2, label=f"{total_cap:.1f} MWh"))
+
+    style_handles = [
+        Line2D([0], [0], color="black", linewidth=2, linestyle="-", label="Dispatch"),
+        Line2D([0], [0], color="black", linewidth=2, linestyle="--", label="Slack (ΔP)"),
+    ]
+    ax.legend(
+        handles=cap_handles + style_handles,
+        title="Capacity / Type",
+        bbox_to_anchor=(1.05, 1),
+        loc="upper left",
+        fontsize=8,
+    )
+    ax.axhline(0, color="black", linewidth=0.8, linestyle=":")
+    ax.set_xlabel("Hour")
+    ax.set_ylabel("% of Node Capacity" if normalize else "MW")
+    ax.set_title(f"Dispatch (—) and Demand Slack (--) at Node {node}")
+    ax.grid(True, linestyle="--", alpha=0.5)
+    fig.tight_layout()
+    norm_suffix = "_norm" if normalize else ""
+    fig.savefig(
+        OUT_PATH / f"node_{node}_dispatch_and_slack{norm_suffix}.png",
+        dpi=150,
+        bbox_inches="tight",
+    )
+    plt.close(fig)
+
+
+def plot_multi_version_objectives(versions_results, OUT_PATH):
+    """Objective vs capacity for multiple version runs on one plot.
+
+    Each version gets its own line so you can compare how the objective curve
+    shifts between formulation variants.
+
+    Args:
+        versions_results: dict mapping version_label (str) -> list of results dicts.
+        OUT_PATH: folder in which to save the figure.
+    """
+    n_vers = len(versions_results)
+    colors = [plt.cm.tab10(i / max(n_vers - 1, 1)) for i in range(n_vers)]
+
+    fig, ax = plt.subplots(figsize=(10, 5))
+    for (version, results_list), color in zip(versions_results.items(), colors):
+        if not results_list:
+            continue
+        capacities = [sum(r["variables"]["e^{batt}_{j,max}"]) for r in results_list]
+        objectives = [r["objective_value"] for r in results_list]
+        pairs = sorted(zip(capacities, objectives))
+        caps, objs = zip(*pairs)
+        ax.plot(caps, objs, marker="o", linewidth=1.5, color=color, label=version)
+
+    ax.set_xlabel("Total Battery Capacity Constraint (MWh)")
+    ax.set_ylabel("Objective Value")
+    ax.set_title("Objective Value vs Battery Capacity — Multi-Version Comparison")
+    ax.legend(title="Version", bbox_to_anchor=(1.05, 1), loc="upper left")
+    ax.grid(True, linestyle="--", alpha=0.5)
+    fig.tight_layout()
+    fig.savefig(
+        OUT_PATH / "objective_vs_capacity_multi_version.png",
+        dpi=150,
+        bbox_inches="tight",
+    )
+    plt.close(fig)
+
+
 def main(date_string):
     OUT_PATH = FIGURE_PATH / date_string
     create_output_folder(OUT_PATH)
@@ -632,14 +732,18 @@ def main(date_string):
         )
         results_list.append(results_dict)
     
-    for interestNode in range(14):#interestNode = 9
+    for interestNode in range(14):
+        try:
+            plot_node_dispatch_and_slack(results_list, interestNode, OUT_PATH)
+        except Exception:
+            pass
         try:
             plot_node_dispatch_by_capacity(results_list, interestNode, OUT_PATH)
-        except:
+        except Exception:
             pass
         try:
             plot_node_slack_by_capacity(results_list, interestNode, OUT_PATH, normalize=False)
-        except:
+        except Exception:
             pass
     
     plot_objective_vs_capacity(results_list,OUT_PATH)
@@ -662,6 +766,33 @@ def find_files_by_date(date_str):
     return json_files
 
 
+VERSION_LABELS = {
+    "v_1": "spring",
+    "v_2": "fall",
+    "v_3": "summer",
+    "v_4": "winter",
+}
+
+
+def main_multi_version(versions=("v_1", "v_2", "v_3", "v_4")):
+    """Load results for all specified versions and produce multi-version comparison plots.
+
+    Saves to figures/comparison/ so it isn't nested inside any single version folder.
+    Version keys are mapped to human-readable season labels via VERSION_LABELS.
+    """
+    OUT_PATH = FIGURE_PATH / "comparison"
+    OUT_PATH.mkdir(parents=True, exist_ok=True)
+
+    versions_results = {}
+    for v in versions:
+        label = VERSION_LABELS.get(v, v)
+        json_files = find_files_by_date(v)
+        versions_results[label] = [get_results_dict(f) for f in json_files]
+
+    plot_multi_version_objectives(versions_results, OUT_PATH)
+
+
 if __name__ == "__main__":
-    date_string = "v_1"
+    date_string = "v_4"
     main(date_string)
+    main_multi_version()
