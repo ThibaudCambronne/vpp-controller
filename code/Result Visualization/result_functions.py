@@ -600,6 +600,45 @@ def plot_slack_3d(results_dict, OUT_PATH, normalize=False, filter_small_nodes=Fa
     return
 
 
+def plot_node_voltage_by_capacity(results_list, node, OUT_PATH, v_min=0.95, v_max=1.05):
+    """Line chart of per-hour voltage magnitude (p.u.) for one node, one line per capacity scenario.
+
+    V_{i,t} stores squared voltage, so the plot takes the square root.
+    Dashed red lines mark the v_min / v_max bounds for quick visual inspection.
+
+    Args:
+        results_list: list of results dicts, one per JSON file for a given date.
+        node: integer node index.
+        OUT_PATH: folder in which to save the figure.
+        v_min, v_max: voltage bounds to draw as reference lines (default 0.95, 1.05 p.u.).
+    """
+    sorted_results = sorted(results_list, key=lambda r: sum(r["variables"]["e^{batt}_{j,max}"]))
+    n_scen = len(sorted_results)
+    colors = [plt.cm.tab10(i / max(n_scen - 1, 1)) for i in range(n_scen)]
+
+    fig, ax = plt.subplots(figsize=(10, 4))
+    for r, color in zip(sorted_results, colors):
+        total_cap = sum(r["variables"]["e^{batt}_{j,max}"])
+        V_sq = np.array(r["variables"]["V_{i,t}"][node], dtype=float)
+        v_pu = np.sqrt(np.maximum(V_sq, 0.0))
+        ax.plot(
+            range(len(v_pu)), v_pu,
+            marker="o", markersize=3, linewidth=1.5,
+            color=color, label=f"Cap = {total_cap:.1f}",
+        )
+
+    ax.axhline(v_min, color="red", linewidth=1.0, linestyle="--", label=f"v_min = {v_min}")
+    ax.axhline(v_max, color="red", linewidth=1.0, linestyle="--", label=f"v_max = {v_max}")
+    ax.set_xlabel("Hour")
+    ax.set_ylabel("Voltage (p.u.)")
+    ax.set_title(f"Voltage at Node {node} Across Capacity Scenarios")
+    ax.legend(title="Total Capacity (MWh)", bbox_to_anchor=(1.05, 1), loc="upper left", fontsize=8)
+    ax.grid(True, linestyle="--", alpha=0.5)
+    fig.tight_layout()
+    fig.savefig(OUT_PATH / f"node_{node}_voltage_by_capacity.png", dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+
 def plot_node_dispatch_and_slack(results_list, node, OUT_PATH, normalize=False):
     """Combined line chart of dispatch and slack for one node, one line-pair per capacity.
 
@@ -699,6 +738,72 @@ def plot_multi_version_objectives(versions_results, OUT_PATH):
     plt.close(fig)
 
 
+def print_binding_constraints(results_dict, threshold=1e-4):
+    """Print which constraints are binding (|dual| > threshold) in a solved result.
+
+    Thermal limits are labelled by edge index and the hours they bind.
+    Voltage bounds are decoded to (node, hour, lower/upper).
+    All other groups report their raw list index so you can cross-reference with
+    the build order in optimization.py.
+
+    Args:
+        results_dict: single results dict from get_results_dict.
+        threshold: minimum |dual| to consider a constraint binding (default 1e-4).
+    """
+    duals = results_dict["duals"]
+    dims = results_dict["diagnostics"]["dimensions"]
+    n_nodes = dims["|N|"]
+    n_edges = dims["|E|"]
+    n_time = dims["|T|"]
+
+    print(f"\n{'='*65}")
+    print(f"BINDING CONSTRAINTS  (|dual| > {threshold})")
+    print(f"  |N|={n_nodes}  |E|={n_edges}  |T|={n_time}")
+    print(f"{'='*65}")
+
+    for group, dual_list in duals.items():
+        lines = []
+        for k, raw_dual in enumerate(dual_list):
+            d = np.atleast_1d(np.array(raw_dual, dtype=float))
+            active = np.where(np.abs(d) > threshold)[0]
+            if active.size == 0:
+                continue
+
+            if group == "thermal_limits":
+                # One vector constraint per edge; index k = edge k.
+                lines.append(
+                    f"  edge={k}  hours={active.tolist()}"
+                    f"  max|λ|={np.abs(d[active]).max():.4f}"
+                )
+
+            elif group == "voltage_bounds":
+                # Built as (lower, upper) pairs in a (node × time) nested loop.
+                pair = k // 2
+                node_idx = pair // n_time
+                t_idx = pair % n_time
+                bound = "lower" if k % 2 == 0 else "upper"
+                lines.append(f"  node={node_idx}  t={t_idx}  {bound}  λ={d[0]:.4f}")
+
+            elif group == "battery_total_capacity":
+                lines.append(f"  global capacity ceiling binding  λ={d[0]:.4f}")
+
+            elif d.size > 1:
+                lines.append(
+                    f"  idx={k}  hours={active.tolist()}"
+                    f"  max|λ|={np.abs(d[active]).max():.4f}"
+                )
+
+            else:
+                lines.append(f"  idx={k}  λ={d[0]:.4f}")
+
+        if lines:
+            print(f"\n[{group}]  ({len(lines)} binding):")
+            for ln in lines:
+                print(ln)
+
+    print()
+
+
 def main(date_string):
     OUT_PATH = FIGURE_PATH / date_string
     create_output_folder(OUT_PATH)
@@ -718,37 +823,43 @@ def main(date_string):
     results_list = []
     for file in json_files:
         results_dict = get_results_dict(file)
-        # if results_dict['status'] != 'optimal':
-        #     print(f"File {file} has status {results_dict['status']}")
-        plot_battery_dispatch_3d(results_dict,OUT_PATH,normalize=False,filter_small_nodes=False)
-        try:
-            plot_transmission_congestion(results_dict,OUT_PATH,filter_small_nodes=True)
-        except Exception as e:
-            print(f"Error plotting transmission congestion: {e}")
-            print(file)
-        plot_slack_3d(results_dict, OUT_PATH, normalize=False, filter_small_nodes=False)
-        plot_generic_value(
-        results_dict, OUT_PATH, 's_{i,t}', dict_key="variables", filter_small_nodes=False
-        )
+        # # if results_dict['status'] != 'optimal':
+        # #     print(f"File {file} has status {results_dict['status']}")
+        # plot_battery_dispatch_3d(results_dict,OUT_PATH,normalize=False,filter_small_nodes=False)
+        # try:
+        #     plot_transmission_congestion(results_dict,OUT_PATH,filter_small_nodes=True)
+        # except Exception as e:
+        #     print(f"Error plotting transmission congestion: {e}")
+        #     print(file)
+        # plot_slack_3d(results_dict, OUT_PATH, normalize=False, filter_small_nodes=False)
+        # plot_generic_value(
+        # results_dict, OUT_PATH, 's_{i,t}', dict_key="variables", filter_small_nodes=False
+        # )
         results_list.append(results_dict)
     
-    for interestNode in range(14):
-        try:
-            plot_node_dispatch_and_slack(results_list, interestNode, OUT_PATH)
-        except Exception:
-            pass
-        try:
-            plot_node_dispatch_by_capacity(results_list, interestNode, OUT_PATH)
-        except Exception:
-            pass
-        try:
-            plot_node_slack_by_capacity(results_list, interestNode, OUT_PATH, normalize=False)
-        except Exception:
-            pass
+
+    print_binding_constraints(results_list[5], threshold=1e-3)
+    # for interestNode in range(14):
+    #     try:
+    #         plot_node_dispatch_and_slack(results_list, interestNode, OUT_PATH)
+    #     except Exception:
+    #         pass
+    #     try:
+    #         plot_node_voltage_by_capacity(results_list, interestNode, OUT_PATH)
+    #     except Exception:
+    #         pass
+    #     try:
+    #         plot_node_dispatch_by_capacity(results_list, interestNode, OUT_PATH)
+    #     except Exception:
+    #         pass
+    #     try:
+    #         plot_node_slack_by_capacity(results_list, interestNode, OUT_PATH, normalize=False)
+    #     except Exception:
+    #         pass
     
-    plot_objective_vs_capacity(results_list,OUT_PATH)
-    plot_capacity_allocation(results_list,OUT_PATH)
-    plot_node_profit_by_capacity(results_list,price_df, OUT_PATH)
+    # plot_objective_vs_capacity(results_list,OUT_PATH)
+    # plot_capacity_allocation(results_list,OUT_PATH)
+    # plot_node_profit_by_capacity(results_list,price_df, OUT_PATH)
     return
 
 
@@ -793,6 +904,6 @@ def main_multi_version(versions=("v_1", "v_2", "v_3", "v_4")):
 
 
 if __name__ == "__main__":
-    date_string = "v_4"
+    date_string = "v_1"
     main(date_string)
-    main_multi_version()
+    # main_multi_version()
